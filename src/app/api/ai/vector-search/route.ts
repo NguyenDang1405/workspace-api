@@ -12,19 +12,42 @@ export async function POST(request: Request) {
       const vector = embeddingResponse.data[0].embedding;
       const vectorString = `[${vector.join(',')}]`;
       const users: unknown[] = await prisma.$queryRaw`
-        SELECT id, email, "fullName", role, department, level, skills, "bioSummary",
-          1 - ("skillEmbedding" <=> ${vectorString}::vector) AS similarity
-        FROM "User" WHERE "skillEmbedding" IS NOT NULL
+        SELECT u.id, u.email, u.full_name AS "fullName", u.role,
+               p.department, p.level, p.skills, p.bio_summary AS "bioSummary",
+               1 - (p.skill_embedding <=> ${vectorString}::vector) AS similarity
+        FROM users u
+        JOIN user_talent_profiles p ON p.user_id = u.id
+        WHERE p.skill_embedding IS NOT NULL AND u.is_active = true
         ORDER BY similarity DESC LIMIT ${limit};
       `;
       return NextResponse.json({ results: users });
     } catch {
       const fallbackUsers = await prisma.user.findMany({
-        where: { OR: [{ fullName: { contains: query, mode: 'insensitive' } }, { bioSummary: { contains: query, mode: 'insensitive' } }, { skills: { hasSome: [query] } }] },
+        where: {
+          isActive: true,
+          OR: [
+            { fullName: { contains: query, mode: 'insensitive' } },
+            { talentProfile: { bioSummary: { contains: query, mode: 'insensitive' } } },
+            { talentProfile: { skills: { hasSome: [query] } } },
+          ],
+        },
         take: limit,
-        select: { id: true, email: true, fullName: true, role: true, department: true, level: true, skills: true, bioSummary: true },
+        include: { talentProfile: true },
       });
-      return NextResponse.json({ results: fallbackUsers.map((u) => ({ ...u, similarity: 0.85 })), notice: 'Using standard fallback search' });
+
+      const formatted = fallbackUsers.map((u) => ({
+        id: u.id,
+        email: u.email,
+        fullName: u.fullName,
+        role: u.role,
+        department: u.talentProfile?.department || 'FULLSTACK',
+        level: u.talentProfile?.level || 'JUNIOR',
+        skills: u.talentProfile?.skills || [],
+        bioSummary: u.talentProfile?.bioSummary || null,
+        similarity: 0.85,
+      }));
+
+      return NextResponse.json({ results: formatted, notice: 'Using standard fallback search' });
     }
   } catch (error) {
     console.error('POST /api/ai/vector-search Error:', error);

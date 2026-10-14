@@ -9,16 +9,36 @@ export async function POST(request: Request) {
     if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
 
     const teams = await prisma.team.findMany({
-      include: { members: { select: { fullName: true, skills: true, level: true, department: true } } },
+      include: {
+        memberships: {
+          where: { leftAt: null },
+          include: {
+            user: {
+              select: {
+                fullName: true,
+                talentProfile: { select: { skills: true, level: true, department: true } },
+              },
+            },
+          },
+        },
+      },
     });
+
+    const teamsWithSkills = teams.map((t) => ({
+      id: t.id,
+      name: t.name,
+      skills: t.memberships.flatMap((m) => m.user.talentProfile?.skills || []),
+    }));
+
+    const projectSkills = project.techStack || [];
 
     const prompt = `Analyze this project requirement:
 Project Name: ${project.name}
-Required Skills: ${project.requiredSkills.join(', ')}
+Required Skills: ${projectSkills.join(', ')}
 Complexity: ${project.complexity}
 
 Available Teams:
-${teams.map((t) => `Team ID: ${t.id}, Name: ${t.name}, Skills: ${t.members.flatMap((m) => m.skills).join(', ')}`).join('\n')}
+${teamsWithSkills.map((t) => `Team ID: ${t.id}, Name: ${t.name}, Skills: ${t.skills.join(', ')}`).join('\n')}
 
 Recommend the top 2 best-fit teams with match scores (0-100%) in JSON:
 {"recommendations": [{"teamId": "...", "teamName": "...", "score": 95, "reason": "..."}]}`;
@@ -32,11 +52,16 @@ Recommend the top 2 best-fit teams with match scores (0-100%) in JSON:
       const result = JSON.parse(completion.choices[0].message.content || '{}');
       return NextResponse.json(result);
     } catch {
-      const heuristicMatches = teams.map((team) => {
-        const teamSkills = new Set(team.members.flatMap((m) => m.skills));
-        const matched = project.requiredSkills.filter((s) => teamSkills.has(s));
-        const score = Math.round((matched.length / (project.requiredSkills.length || 1)) * 100);
-        return { teamId: team.id, teamName: team.name, score: Math.max(score, 70), reason: `${matched.length}/${project.requiredSkills.length} skills matched` };
+      const heuristicMatches = teamsWithSkills.map((team) => {
+        const teamSkills = new Set(team.skills);
+        const matched = projectSkills.filter((s) => teamSkills.has(s));
+        const score = Math.round((matched.length / (projectSkills.length || 1)) * 100);
+        return {
+          teamId: team.id,
+          teamName: team.name,
+          score: Math.max(score, 70),
+          reason: `${matched.length}/${projectSkills.length || 1} skills matched`,
+        };
       });
       return NextResponse.json({ recommendations: heuristicMatches });
     }

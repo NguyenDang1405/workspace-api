@@ -3,7 +3,7 @@
 import React from 'react';
 import { TaskResponse } from '@/types';
 import { Badge } from '@/components/ui/badge';
-import { CheckSquare, Sparkles, User as UserIcon, ListChecks } from 'lucide-react';
+import { CheckSquare, Sparkles, User as UserIcon, ListChecks, AlertOctagon } from 'lucide-react';
 
 interface TaskCardProps {
   task: TaskResponse;
@@ -25,18 +25,32 @@ export function TaskCard({ task, onOpenBreakdown, onOpenChecklist }: TaskCardPro
   const completedChecklistCount = task.checklist ? task.checklist.filter((item) => item.done).length : 0;
 
   return (
-    <div className="glass-card rounded-xl p-4 space-y-3 relative group">
+    <div className={`glass-card rounded-xl p-4 space-y-3 relative group ${task.isBlocked ? 'border-rose-900/60 ring-1 ring-rose-900/40' : ''}`}>
       <div className="flex items-center justify-between">
         <Badge variant={getPriorityVariant(task.priority)}>{task.priority}</Badge>
-        {task.requiredLevel && (
-          <span className="text-[10px] font-bold text-indigo-400 bg-indigo-950/80 px-2 py-0.5 rounded-md border border-indigo-800/40 uppercase">{task.requiredLevel}</span>
-        )}
+        <div className="flex items-center space-x-1.5">
+          {task.isBlocked && (
+            <span className="text-[10px] font-bold text-rose-400 bg-rose-950/80 px-2 py-0.5 rounded-md border border-rose-800/60 uppercase flex items-center gap-1">
+              <AlertOctagon className="h-3 w-3" /> Blocked
+            </span>
+          )}
+          {task.requiredLevel && (
+            <span className="text-[10px] font-bold text-indigo-400 bg-indigo-950/80 px-2 py-0.5 rounded-md border border-indigo-800/40 uppercase">{task.requiredLevel}</span>
+          )}
+        </div>
       </div>
 
       <div>
         <h4 className="font-semibold text-slate-100 text-sm group-hover:text-indigo-300 transition-colors">{task.title}</h4>
         {task.description && <p className="text-xs text-slate-400 line-clamp-2 mt-1 leading-relaxed">{task.description}</p>}
       </div>
+
+      {task.isBlocked && task.blockReason && (
+        <div className="flex items-center space-x-2 text-xs text-rose-300 bg-rose-950/40 px-2.5 py-1.5 rounded-lg border border-rose-800/40">
+          <AlertOctagon className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+          <span className="truncate">{task.blockReason}</span>
+        </div>
+      )}
 
       {checklistCount > 0 && (
         <div className="flex items-center space-x-2 text-xs text-slate-400 bg-slate-950/50 px-2.5 py-1 rounded-lg border border-slate-800">
