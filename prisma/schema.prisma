@@ -40,8 +40,9 @@ enum Complexity {
 
 enum ProjectStatus {
   PLANNING
-  IN_PROGRESS
+  ACTIVE
   COMPLETED
+  ARCHIVED
 }
 
 enum TaskPriority {
@@ -52,81 +53,412 @@ enum TaskPriority {
 }
 
 enum TaskStatus {
+  SCHEDULED
   TODO
   IN_PROGRESS
   REVIEW
   DONE
 }
 
+enum DispatchRunStatus {
+  PREVIEW
+  APPROVED
+  CANCELLED
+}
+
+enum SkillOutcome {
+  ACCEPTED
+  REJECTED
+  OVERDUE
+}
+
+// 1. USERS & AUTH
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("hashed_password")
+  fullName     String   @map("full_name") @db.VarChar(100)
+  role         Role     @default(MEMBER)
+  isActive     Boolean  @default(true) @map("is_active")
+  authVersion  Int      @default(1) @map("auth_version")
+  avatarUrl    String?  @map("avatar_url")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relationships
+  tokens                 UserToken[]
+  talentProfile          UserTalentProfile?
+  auditLogsAsSubject     TalentAuditLog[]         @relation("AuditSubject")
+  auditLogsAsActor       TalentAuditLog[]         @relation("AuditActor")
+  skillStates            UserSkillState[]
+  ledTeams               Team[]                   @relation("TeamLeader")
+  teamMemberships        TeamMember[]
+  ownedProjects          Project[]                @relation("ProjectOwner")
+  assignedTasks          Task[]                   @relation("TaskAssignee")
+  requestedDispatchRuns  DispatchRun[]            @relation("DispatchRequester")
+  dispatchRecommendations DispatchRecommendation[] @relation("RecommendedCandidate")
+  dispatchedTasks        TaskDispatchLog[]        @relation("DispatchedAssignee")
+  dispatchedByLogs       TaskDispatchLog[]        @relation("DispatchedActor")
+  statusChanges          TaskStatusHistory[]      @relation("StatusChanger")
+  blockHistories         TaskBlockHistory[]       @relation("BlockChanger")
+  skillRatings           UserSkillRating[]
+  skillEvidences         UserSkillEvidence[]      @relation("EvidenceSubject")
+  observedEvidences      UserSkillEvidence[]      @relation("EvidenceObserver")
+
+  @@map("users")
+}
+
+model UserToken {
+  id               String    @id @default(uuid()) @db.Uuid
+  tokenFamilyId    String    @default(uuid()) @map("token_family_id") @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  refreshTokenHash String    @unique @map("refresh_token_hash")
+  deviceInfo       String?   @map("device_info") @db.VarChar(255)
+  ipAddress        String?   @map("ip_address") @db.VarChar(45)
+  revokedAt        DateTime? @map("revoked_at")
+  revokeReason     String?   @map("revoke_reason") @db.VarChar(50)
+  replacedByTokenId String?  @map("replaced_by_token_id") @db.Uuid
+  expiresAt        DateTime  @map("expires_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedByToken  UserToken? @relation("TokenReplacement", fields: [replacedByTokenId], references: [id], onDelete: SetNull)
+  replacesTokens   UserToken[] @relation("TokenReplacement")
+
+  @@index([userId, expiresAt(sort: Desc)], map: "idx_user_tokens_active_by_user")
+  @@map("user_tokens")
+}
+
+model UserTalentProfile {
+  userId               String                       @id @map("user_id") @db.Uuid
+  department           Department                   @default(FULLSTACK)
+  level                Level                        @default(JUNIOR)
+  skills               String[]                     @default([])
+  bioSummary           String?                      @map("bio_summary") @db.Text
+  skillEmbedding       Unsupported("vector(1536)")? @map("skill_embedding")
+  profileRevision      BigInt                       @default(1) @map("profile_revision")
+  embeddingRevision    BigInt                       @default(0) @map("embedding_revision")
+  embeddingContentHash String?                      @map("embedding_content_hash") @db.Char(64)
+  lastEmbeddedAt       DateTime?                    @map("last_embedded_at")
+  isEmbeddingStale     Boolean                      @default(false) @map("is_embedding_stale")
+  updatedAt            DateTime                     @default(now()) @updatedAt @map("updated_at")
+
+  user                 User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([department, level, userId], map: "idx_talent_dispatch_filter")
+  @@map("user_talent_profiles")
+}
+
+model TalentAuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  subjectUserId String?  @map("subject_user_id") @db.Uuid
+  changedBy     String?  @map("changed_by") @db.Uuid
+  actionType    String   @map("action_type") @db.VarChar(50)
+  oldData       Json?    @map("old_data")
+  newData       Json?    @map("new_data")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  subjectUser   User?    @relation("AuditSubject", fields: [subjectUserId], references: [id], onDelete: SetNull)
+  actor         User?    @relation("AuditActor", fields: [changedBy], references: [id], onDelete: SetNull)
+
+  @@index([subjectUserId, createdAt(sort: Desc)], map: "idx_talent_audit_subject_time")
+  @@map("talent_audit_logs")
+}
+
+// 2. SKILLS (BAYESIAN & TAXONOMY)
+model Skill {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  userSkillStates    UserSkillState[]
+  taskRequiredSkills TaskRequiredSkill[]
+  userSkillEvidences UserSkillEvidence[]
+
+  @@map("skills")
+}
+
+model UserSkillState {
+  userId          String    @map("user_id") @db.Uuid
+  skillId         String    @map("skill_id") @db.Uuid
+  declaredLevel   Int?      @map("declared_level") @db.SmallInt
+  beliefMean      Decimal   @default(0.5000) @map("belief_mean") @db.Decimal(5, 4)
+  beliefVariance  Decimal   @default(0.25000) @map("belief_variance") @db.Decimal(6, 5)
+  evidenceCount   Int       @default(0) @map("evidence_count")
+  lastEvaluatedAt DateTime? @map("last_evaluated_at")
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill           Skill     @relation(fields: [skillId], references: [id], onDelete: Restrict)
+
+  @@id([userId, skillId])
+  @@map("user_skill_states")
+}
+
+// 3. TEAMS & MEMBERS
 model Team {
   id          String   @id @default(uuid()) @db.Uuid
-  name        String
-  description String?
-  leaderId    String?  @db.Uuid
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  name        String   @unique @db.VarChar(100)
+  description String?  @db.Text
+  leaderId    String?  @map("leader_id") @db.Uuid
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
-  leader   User?     @relation("TeamLeader", fields: [leaderId], references: [id], onDelete: SetNull)
-  members  User[]    @relation("TeamMembers")
-  projects Project[]
+  leader      User?        @relation("TeamLeader", fields: [leaderId], references: [id], onDelete: Restrict)
+  memberships TeamMember[]
+  projects    Project[]
+
+  @@map("teams")
 }
 
-model User {
-  id             String                          @id @default(uuid()) @db.Uuid
-  teamId         String?                         @db.Uuid
-  email          String                          @unique
-  passwordHash   String
-  fullName       String
-  avatarUrl      String?
-  role           Role                            @default(MEMBER)
-  department     Department                      @default(FULLSTACK)
-  level          Level                           @default(JUNIOR)
-  skills         String[]                        @default([])
-  bioSummary     String?                         @db.Text
-  skillEmbedding Unsupported("vector(1536)")?
-  isActive       Boolean                         @default(true)
-  createdAt      DateTime                        @default(now())
-  updatedAt      DateTime                        @updatedAt
+model TeamMember {
+  id       String    @id @default(uuid()) @db.Uuid
+  teamId   String    @map("team_id") @db.Uuid
+  userId   String    @map("user_id") @db.Uuid
+  joinedAt DateTime  @default(now()) @map("joined_at")
+  leftAt   DateTime? @map("left_at")
 
-  team            Team?     @relation("TeamMembers", fields: [teamId], references: [id], onDelete: SetNull)
-  leadTeams       Team[]    @relation("TeamLeader")
-  createdProjects Project[] @relation("ProjectCreator")
-  assignedTasks   Task[]    @relation("TaskAssignee")
+  team     Team      @relation(fields: [teamId], references: [id], onDelete: Restrict)
+  user     User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([teamId, userId], map: "uq_team_members_active_membership")
+  @@index([userId, teamId], map: "idx_team_members_active_user")
+  @@map("team_members")
 }
 
+// 4. PROJECTS
 model Project {
-  id             String        @id @default(uuid()) @db.Uuid
-  assignedTeamId String?       @db.Uuid
-  createdBy      String        @db.Uuid
-  name           String
-  description    String?
-  requiredSkills String[]      @default([])
-  complexity     Complexity    @default(MEDIUM)
-  status         ProjectStatus @default(PLANNING)
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  id            String        @id @default(uuid()) @db.Uuid
+  teamId        String        @map("team_id") @db.Uuid
+  ownerId       String        @map("owner_id") @db.Uuid
+  name          String        @db.VarChar(200)
+  description   String        @db.Text
+  techStack     String[]      @default([]) @map("tech_stack")
+  complexity    Complexity    @default(MEDIUM)
+  startDate     DateTime      @default(now()) @map("start_date") @db.Date
+  targetEndDate DateTime      @default(now()) @map("target_end_date") @db.Date
+  status        ProjectStatus @default(PLANNING)
+  archivedAt    DateTime?     @map("archived_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
 
-  assignedTeam Team? @relation(fields: [assignedTeamId], references: [id], onDelete: SetNull)
-  creator      User  @relation("ProjectCreator", fields: [createdBy], references: [id])
-  tasks        Task[]
+  team          Team          @relation(fields: [teamId], references: [id], onDelete: Restrict)
+  owner         User          @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  tasks         Task[]
+  dispatchRuns  DispatchRun[]
+
+  @@index([teamId, status], map: "idx_projects_team_status")
+  @@map("projects")
 }
 
+// 5. TASKS (DAG & CPM)
 model Task {
-  id            String       @id @default(uuid()) @db.Uuid
-  projectId     String       @db.Uuid
-  parentTaskId  String?      @db.Uuid
-  assignedTo    String?      @db.Uuid
-  title         String
-  description   String?
-  priority      TaskPriority @default(MEDIUM)
-  status        TaskStatus   @default(TODO)
-  requiredLevel String?
-  checklist     Json?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  id                 String       @id @default(uuid()) @db.Uuid
+  projectId          String       @map("project_id") @db.Uuid
+  parentTaskId       String?      @map("parent_task_id") @db.Uuid
+  assignedTo         String?      @map("assigned_to") @db.Uuid
+  title              String       @db.VarChar(255)
+  description        String       @db.Text
+  targetDepartment   Department   @default(FULLSTACK) @map("target_department")
+  requiredLevel      Level        @default(JUNIOR) @map("required_level")
+  estimatedHours     Decimal      @default(4.0) @map("estimated_hours") @db.Decimal(8, 2)
+  priority           TaskPriority @default(MEDIUM)
+  scheduledFor       DateTime?    @map("scheduled_for") @db.Date
+  status             TaskStatus   @default(TODO)
+  checklist          Json         @default("[]")
+  isPotentialBlocker Boolean      @default(false) @map("is_potential_blocker")
+  isBlocked          Boolean      @default(false) @map("is_blocked")
+  blockReason        String?      @map("block_reason") @db.VarChar(255)
+  blockedAt          DateTime?    @map("blocked_at")
+  startedAt          DateTime?    @map("started_at")
+  completedAt        DateTime?    @map("completed_at")
+  statusEnteredAt    DateTime     @default(now()) @map("status_entered_at")
+  
+  // Critical Path Method (CPM)
+  earlyStartHours    Decimal?     @map("early_start_hours") @db.Decimal(10, 2)
+  earlyFinishHours   Decimal?     @map("early_finish_hours") @db.Decimal(10, 2)
+  lateStartHours     Decimal?     @map("late_start_hours") @db.Decimal(10, 2)
+  lateFinishHours    Decimal?     @map("late_finish_hours") @db.Decimal(10, 2)
+  slackHours         Decimal?     @map("slack_hours") @db.Decimal(10, 2)
+  isCriticalPath     Boolean      @default(false) @map("is_critical_path")
 
-  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  parentTask Task?   @relation("TaskHierarchy", fields: [parentTaskId], references: [id], onDelete: Cascade)
-  subTasks   Task[]  @relation("TaskHierarchy")
-  assignee   User?   @relation("TaskAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  project            Project      @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  parentTask         Task?        @relation("TaskHierarchy", fields: [parentTaskId], references: [id], onDelete: Cascade)
+  subTasks           Task[]       @relation("TaskHierarchy")
+  assignee           User?        @relation("TaskAssignee", fields: [assignedTo], references: [id], onDelete: Restrict)
+
+  // Relationships
+  successorDependencies   TaskDependency[]         @relation("PredecessorTask")
+  predecessorDependencies TaskDependency[]         @relation("SuccessorTask")
+  dispatchRecommendations DispatchRecommendation[]
+  dispatchLogs            TaskDispatchLog[]
+  statusHistories         TaskStatusHistory[]
+  blockHistories          TaskBlockHistory[]
+  requiredSkills          TaskRequiredSkill[]
+  skillEvidences          UserSkillEvidence[]
+
+  @@index([projectId, scheduledFor, id], map: "idx_tasks_dispatch_lookup")
+  @@index([projectId, assignedTo, status, updatedAt(sort: Desc)], map: "idx_tasks_kanban_board")
+  @@index([projectId], map: "idx_tasks_blocked_lookup")
+  @@map("tasks")
+}
+
+model TaskDependency {
+  predecessorId  String   @map("predecessor_id") @db.Uuid
+  successorId    String   @map("successor_id") @db.Uuid
+  dependencyType String   @default("FS") @map("dependency_type") @db.VarChar(10)
+  lagHours       Decimal  @default(0) @map("lag_hours") @db.Decimal(8, 2)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  predecessor    Task     @relation("PredecessorTask", fields: [predecessorId], references: [id], onDelete: Restrict)
+  successor      Task     @relation("SuccessorTask", fields: [successorId], references: [id], onDelete: Restrict)
+
+  @@id([predecessorId, successorId])
+  @@index([successorId], map: "idx_task_deps_successor")
+  @@map("task_dependencies")
+}
+
+// 6. DISPATCH & RAG RECOMMENDATIONS
+model DispatchRun {
+  id               String            @id @default(uuid()) @db.Uuid
+  projectId        String            @map("project_id") @db.Uuid
+  dispatchDate     DateTime          @map("dispatch_date") @db.Date
+  requestedBy      String            @map("requested_by") @db.Uuid
+  algorithmVersion String            @map("algorithm_version") @db.VarChar(100)
+  status           DispatchRunStatus @default(PREVIEW)
+  createdAt        DateTime          @default(now()) @map("created_at")
+  finalizedAt      DateTime?         @map("finalized_at")
+
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  requester        User              @relation("DispatchRequester", fields: [requestedBy], references: [id], onDelete: Restrict)
+  recommendations  DispatchRecommendation[]
+  dispatchLogs     TaskDispatchLog[]
+
+  @@map("dispatch_runs")
+}
+
+model DispatchRecommendation {
+  dispatchRunId   String      @map("dispatch_run_id") @db.Uuid
+  taskId          String      @map("task_id") @db.Uuid
+  candidateUserId String      @map("candidate_user_id") @db.Uuid
+  candidateRank   Int         @map("candidate_rank") @db.SmallInt
+  sparseRank      Int?        @map("sparse_rank") @db.SmallInt
+  denseRank       Int?        @map("dense_rank") @db.SmallInt
+  rrfScore        Decimal     @map("rrf_score") @db.Decimal(12, 10)
+  workloadHours   Decimal     @default(0) @map("workload_hours") @db.Decimal(10, 2)
+  isSelected      Boolean     @default(false) @map("is_selected")
+  selectedByHuman Boolean     @default(false) @map("selected_by_human")
+
+  dispatchRun     DispatchRun @relation(fields: [dispatchRunId], references: [id], onDelete: Restrict)
+  task            Task        @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  candidateUser   User        @relation("RecommendedCandidate", fields: [candidateUserId], references: [id], onDelete: Restrict)
+
+  @@id([dispatchRunId, taskId, candidateUserId])
+  @@unique([dispatchRunId, taskId, candidateRank])
+  @@index([dispatchRunId, taskId, candidateRank], map: "idx_dispatch_recommendations_task")
+  @@map("dispatch_recommendations")
+}
+
+model TaskDispatchLog {
+  id              String       @id @default(uuid()) @db.Uuid
+  dispatchRunId   String?      @map("dispatch_run_id") @db.Uuid
+  taskId          String       @map("task_id") @db.Uuid
+  assignedTo      String       @map("assigned_to") @db.Uuid
+  dispatchedBy    String?      @map("dispatched_by") @db.Uuid
+  rrfScore        Decimal?     @map("rrf_score") @db.Decimal(12, 10)
+  finalScore      Decimal?     @map("final_score") @db.Decimal(12, 6)
+  isHumanOverride Boolean      @default(false) @map("is_human_override")
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  dispatchRun     DispatchRun? @relation(fields: [dispatchRunId], references: [id], onDelete: Restrict)
+  task            Task         @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  assignee        User         @relation("DispatchedAssignee", fields: [assignedTo], references: [id], onDelete: Restrict)
+  dispatcher      User?        @relation("DispatchedActor", fields: [dispatchedBy], references: [id], onDelete: SetNull)
+
+  @@unique([dispatchRunId, taskId], map: "uq_task_dispatch_once_per_run")
+  @@map("task_dispatch_logs")
+}
+
+// 7. FLOW OBSERVABILITY & ELO SKILLS
+model TaskStatusHistory {
+  id                            String   @id @default(uuid()) @db.Uuid
+  taskId                        String   @map("task_id") @db.Uuid
+  changedBy                     String?  @map("changed_by") @db.Uuid
+  fromStatus                    String   @map("from_status") @db.VarChar(20)
+  toStatus                      String   @map("to_status") @db.VarChar(20)
+  durationInPreviousStatusHours Decimal? @map("duration_in_previous_status_hours") @db.Decimal(7, 2)
+  createdAt                     DateTime @default(now()) @map("created_at")
+
+  task                          Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  changer                       User?    @relation("StatusChanger", fields: [changedBy], references: [id], onDelete: SetNull)
+
+  @@index([taskId, createdAt(sort: Desc)], map: "idx_task_history_task_time")
+  @@index([toStatus, createdAt(sort: Desc)], map: "idx_task_status_history_flow_time")
+  @@map("task_status_history")
+}
+
+model TaskBlockHistory {
+  id        String   @id @default(uuid()) @db.Uuid
+  taskId    String   @map("task_id") @db.Uuid
+  changedBy String?  @map("changed_by") @db.Uuid
+  isBlocked Boolean  @map("is_blocked")
+  reason    String?  @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  changer   User?    @relation("BlockChanger", fields: [changedBy], references: [id], onDelete: SetNull)
+
+  @@map("task_block_history")
+}
+
+model TaskRequiredSkill {
+  taskId              String   @map("task_id") @db.Uuid
+  skillId             String   @map("skill_id") @db.Uuid
+  requiredProficiency Int      @default(3) @map("required_proficiency") @db.SmallInt
+
+  task                Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  skill               Skill    @relation(fields: [skillId], references: [id], onDelete: Restrict)
+
+  @@id([taskId, skillId])
+  @@map("task_required_skills")
+}
+
+model UserSkillRating {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  skillName      String   @map("skill_name") @db.VarChar(50)
+  ratingScore    Decimal  @default(1200.00) @map("rating_score") @db.Decimal(6, 2)
+  tasksCompleted Int      @default(0) @map("tasks_completed")
+  tasksRejected  Int      @default(0) @map("tasks_rejected")
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, skillName], map: "uq_user_skill")
+  @@index([userId, skillName], map: "idx_user_skills_lookup")
+  @@map("user_skill_ratings")
+}
+
+model UserSkillEvidence {
+  id             String       @id @default(uuid()) @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  skillId        String       @map("skill_id") @db.Uuid
+  taskId         String       @map("task_id") @db.Uuid
+  observedBy     String?      @map("observed_by") @db.Uuid
+  outcome        SkillOutcome
+  evidenceWeight Decimal      @default(1.0000) @map("evidence_weight") @db.Decimal(5, 4)
+  note           String?      @db.Text
+  observedAt     DateTime     @default(now()) @map("observed_at")
+
+  user           User         @relation("EvidenceSubject", fields: [userId], references: [id], onDelete: Restrict)
+  skill          Skill        @relation(fields: [skillId], references: [id], onDelete: Restrict)
+  task           Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  observer       User?        @relation("EvidenceObserver", fields: [observedBy], references: [id], onDelete: SetNull)
+
+  @@index([userId, skillId, observedAt(sort: Desc)], map: "idx_user_skill_evidence_user_skill_time")
+  @@map("user_skill_evidence")
 }

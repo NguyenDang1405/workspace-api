@@ -34,11 +34,18 @@ export async function POST(request: Request) {
         email: validatedData.email,
         passwordHash,
         fullName: validatedData.fullName,
-        department: validatedData.department,
         role: validatedData.role,
-        level: validatedData.level,
-        skills: validatedData.skills,
-        bioSummary: validatedData.bioSummary,
+        talentProfile: {
+          create: {
+            department: validatedData.department,
+            level: validatedData.level,
+            skills: validatedData.skills,
+            bioSummary: validatedData.bioSummary,
+          },
+        },
+      },
+      include: {
+        talentProfile: true,
       },
     });
 

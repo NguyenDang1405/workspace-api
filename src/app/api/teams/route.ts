@@ -13,12 +13,48 @@ export async function GET() {
     const teams = await prisma.team.findMany({
       include: {
         leader: { select: { id: true, fullName: true, email: true, avatarUrl: true } },
-        members: { select: { id: true, fullName: true, email: true, avatarUrl: true, role: true, department: true, level: true } },
+        memberships: {
+          where: { leftAt: null },
+          include: {
+            user: {
+              select: {
+                id: true,
+                fullName: true,
+                email: true,
+                avatarUrl: true,
+                role: true,
+                talentProfile: { select: { department: true, level: true, skills: true } },
+              },
+            },
+          },
+        },
         projects: { select: { id: true, name: true, status: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
-    return NextResponse.json(teams);
+
+    const formatted = teams.map((team) => ({
+      id: team.id,
+      name: team.name,
+      description: team.description,
+      leaderId: team.leaderId,
+      leader: team.leader,
+      members: team.memberships.map((m) => ({
+        id: m.user.id,
+        fullName: m.user.fullName,
+        email: m.user.email,
+        avatarUrl: m.user.avatarUrl,
+        role: m.user.role,
+        department: m.user.talentProfile?.department || 'FULLSTACK',
+        level: m.user.talentProfile?.level || 'JUNIOR',
+        skills: m.user.talentProfile?.skills || [],
+      })),
+      projects: team.projects,
+      createdAt: team.createdAt,
+      updatedAt: team.updatedAt,
+    }));
+
+    return NextResponse.json(formatted);
   } catch (error) {
     console.error('GET /api/teams Error:', error);
     return NextResponse.json({ error: 'Failed to fetch teams' }, { status: 500 });
