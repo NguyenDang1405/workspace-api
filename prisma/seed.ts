@@ -7,24 +7,19 @@ async function main() {
   console.log('🌱 Seeding database...');
 
   // 1. Clean up existing data in dependency order
+  await prisma.dailyStandupReport.deleteMany();
+  await prisma.reschedulingEvent.deleteMany();
+  await prisma.gitPullRequest.deleteMany();
   await prisma.userSkillRating.deleteMany();
-  await prisma.userSkillEvidence.deleteMany();
-  await prisma.userSkillState.deleteMany();
   await prisma.talentAuditLog.deleteMany();
-  await prisma.taskBlockHistory.deleteMany();
   await prisma.taskStatusHistory.deleteMany();
-  await prisma.taskRequiredSkill.deleteMany();
   await prisma.taskDependency.deleteMany();
-  await prisma.dispatchRecommendation.deleteMany();
-  await prisma.taskDispatchLog.deleteMany();
-  await prisma.dispatchRun.deleteMany();
   await prisma.task.deleteMany();
   await prisma.project.deleteMany();
   await prisma.teamMember.deleteMany();
   await prisma.team.deleteMany();
   await prisma.userToken.deleteMany();
   await prisma.userTalentProfile.deleteMany();
-  await prisma.skill.deleteMany();
   await prisma.user.deleteMany();
 
   const passwordHash = await bcrypt.hash('password123', 10);
@@ -111,20 +106,7 @@ async function main() {
     ],
   });
 
-  // 5. Create Master Skills
-  const skillsData = [
-    { name: 'TypeScript' },
-    { name: 'React' },
-    { name: 'Next.js' },
-    { name: 'PostgreSQL' },
-    { name: 'Docker' },
-  ];
-
-  for (const s of skillsData) {
-    await prisma.skill.create({ data: s });
-  }
-
-  // 6. Create Project
+  // 5. Create Project
   const projectSmart = await prisma.project.create({
     data: {
       name: 'Smart Workspace Platform',
@@ -134,10 +116,12 @@ async function main() {
       status: ProjectStatus.ACTIVE,
       ownerId: adminUser.id,
       teamId: teamAlpha.id,
+      startDate: new Date(),
+      targetEndDate: new Date(Date.now() + 30 * 24 * 3600 * 1000),
     },
   });
 
-  // 7. Create Tasks
+  // 6. Create Tasks
   const task1 = await prisma.task.create({
     data: {
       projectId: projectSmart.id,
@@ -236,7 +220,7 @@ async function main() {
     },
   });
 
-  // 8. Seed Dynamic Skill Ratings (Elo)
+  // 7. Seed Dynamic Skill Ratings (Elo)
   await prisma.userSkillRating.createMany({
     data: [
       { userId: adminUser.id, skillName: 'PostgreSQL', ratingScore: 1350.00, tasksCompleted: 14, tasksRejected: 1 },
