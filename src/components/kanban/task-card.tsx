@@ -22,7 +22,7 @@ export function TaskCard({ task, onOpenBreakdown, onOpenChecklist }: TaskCardPro
   };
 
   const checklistCount = task.checklist ? task.checklist.length : 0;
-  const completedChecklistCount = task.checklist ? task.checklist.filter((item) => item.done).length : 0;
+  const completedChecklistCount = task.checklist ? task.checklist.filter((item: { done?: boolean }) => Boolean(item.done)).length : 0;
 
   return (
     <div className={`glass-card rounded-xl p-4 space-y-3 relative group ${task.isBlocked ? 'border-rose-900/60 ring-1 ring-rose-900/40' : ''}`}>
