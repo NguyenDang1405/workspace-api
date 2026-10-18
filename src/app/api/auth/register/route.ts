@@ -1,18 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
-import { hashPassword, signJWT } from '@/lib/auth';
-
-const RegisterSchema = z.object({
-  email: z.string().email('Invalid email format'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
-  fullName: z.string().min(2, 'Full name is required'),
-  department: z.enum(['FRONTEND', 'BACKEND', 'DEVOPS', 'QA', 'FULLSTACK']).optional().default('FULLSTACK'),
-  role: z.enum(['ADMIN', 'PM', 'LEADER', 'MEMBER']).optional().default('MEMBER'),
-  level: z.enum(['INTERN', 'FRESHER', 'JUNIOR', 'MIDDLE', 'SENIOR']).optional().default('JUNIOR'),
-  skills: z.array(z.string()).optional().default([]),
-  bioSummary: z.string().optional(),
-});
+import { hashPassword, createAccessToken } from '@/lib/auth';
+import { RegisterSchema, ApiResponse } from '@/types';
 
 export async function POST(request: Request) {
   try {
@@ -24,57 +14,98 @@ export async function POST(request: Request) {
     });
 
     if (existingUser) {
-      return NextResponse.json({ error: 'Email already registered' }, { status: 400 });
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'EMAIL_ALREADY_EXISTS',
+            message: 'Email already registered',
+          },
+        },
+        { status: 409 }
+      );
     }
 
     const passwordHash = await hashPassword(validatedData.password);
 
-    const user = await prisma.user.create({
-      data: {
-        email: validatedData.email,
-        passwordHash,
-        fullName: validatedData.fullName,
-        role: validatedData.role,
-        talentProfile: {
-          create: {
-            department: validatedData.department,
-            level: validatedData.level,
-            skills: validatedData.skills,
-            bioSummary: validatedData.bioSummary,
-          },
+    const user = await prisma.$transaction(async (tx) => {
+      const createdUser = await tx.user.create({
+        data: {
+          email: validatedData.email,
+          passwordHash,
+          fullName: validatedData.fullName,
+          role: validatedData.role,
         },
-      },
-      include: {
-        talentProfile: true,
-      },
+      });
+
+      await tx.userTalentProfile.create({
+        data: {
+          userId: createdUser.id,
+          department: validatedData.department,
+          level: validatedData.level,
+          skills: validatedData.skills || [],
+          bioSummary: validatedData.bioSummary || null,
+        },
+      });
+
+      return createdUser;
     });
 
-    const token = await signJWT({
+    const accessToken = await createAccessToken({
       userId: user.id,
       email: user.email,
       role: user.role,
+      authVersion: user.authVersion,
       fullName: user.fullName,
     });
 
-    const response = NextResponse.json(
-      { message: 'User registered successfully', user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role } },
-      { status: 201 }
-    );
+    const responseBody: ApiResponse = {
+      success: true,
+      data: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        accessToken,
+      },
+      message: 'User registered successfully',
+    };
 
-    response.cookies.set('token', token, {
+    const response = NextResponse.json(responseBody, { status: 201 });
+
+    response.cookies.set('access_token', accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7,
+      maxAge: 60 * 60,
       path: '/',
     });
 
     return response;
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: 'Validation failed', details: error.errors }, { status: 400 });
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Invalid input data',
+            details: error.errors,
+          },
+        },
+        { status: 400 }
+      );
     }
     console.error('Register API Error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Internal server error',
+        },
+      },
+      { status: 500 }
+    );
   }
 }
