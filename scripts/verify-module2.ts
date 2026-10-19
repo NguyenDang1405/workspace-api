@@ -3,7 +3,7 @@
  * DAG Decomposition Engine & Critical Path Method (CPM)
  *
  * Designed to run seamlessly in any Node/TS environment (Node 18-24)
- * with zero module resolution conflicts.
+ * with zero module resolution conflicts and zero global scope clashes.
  *
  * Verifies:
  * 1. Kahn's Algorithm & Cycle Detection (CYCLIC_DEPENDENCY_DETECTED)
@@ -19,18 +19,18 @@
  * Run: npm run verify:module2
  */
 
-const BASE_URL = process.env.TEST_APP_URL || 'http://localhost:3000';
+const M2_BASE_URL = process.env.TEST_APP_URL || 'http://localhost:3000';
 
-interface StepResult {
+interface M2StepResult {
   step: string;
   passed: boolean;
   details: string;
 }
 
-const results: StepResult[] = [];
+const m2Results: M2StepResult[] = [];
 
-function record(step: string, passed: boolean, details: string) {
-  results.push({ step, passed, details });
+function recordM2(step: string, passed: boolean, details: string) {
+  m2Results.push({ step, passed, details });
   const icon = passed ? '✅ PASS' : '❌ FAIL';
   console.log(`${icon} | ${step}: ${details}`);
 }
@@ -217,10 +217,10 @@ function isEdgeCritical(
 // ============================================================
 // MAIN VERIFICATION FLOW
 // ============================================================
-async function runVerification() {
+async function runModule2Verification() {
   console.log(`\n============================================================`);
   console.log(`🚀 BẮT ĐẦU KIỂM THỬ MODULE 2: DAG DECOMPOSITION & CPM ENGINE`);
-  console.log(`Target: ${BASE_URL}`);
+  console.log(`Target: ${M2_BASE_URL}`);
   console.log(`============================================================\n`);
 
   // ============================================================
@@ -246,7 +246,7 @@ async function runVerification() {
       }
     }
 
-    record(
+    recordM2(
       'A.1: Kahn Cycle Detection (A <-> B)',
       threwExpectedError,
       threwExpectedError
@@ -254,7 +254,7 @@ async function runVerification() {
         : 'Thất bại: Không ném lỗi chu trình vòng'
     );
   } catch (err: unknown) {
-    record('A.1: Kahn Cycle Detection', false, String(err));
+    recordM2('A.1: Kahn Cycle Detection', false, String(err));
   }
 
   // ------------------------------------------------------------
@@ -276,13 +276,13 @@ async function runVerification() {
       }
     }
 
-    record(
+    recordM2(
       'A.2: Kahn Multi-node Cycle Detection (T1 -> T2 -> T3 -> T1)',
       threwExpectedError,
       threwExpectedError ? 'Phát hiện chu trình 3 đỉnh thành công' : 'Thất bại'
     );
   } catch (err: unknown) {
-    record('A.2: Kahn Multi-node Cycle Detection', false, String(err));
+    recordM2('A.2: Kahn Multi-node Cycle Detection', false, String(err));
   }
 
   // ------------------------------------------------------------
@@ -312,7 +312,7 @@ async function runVerification() {
     const durationOk = cpmResult.projectMakespan === 14;
     const allPassed = Boolean(t1Ok && t2Ok && t3Ok && t4Ok && durationOk);
 
-    record(
+    recordM2(
       'A.3: Tính toán CPM (ES, EF, LS, LF, Slack, Critical Path)',
       allPassed,
       `Duration: ${cpmResult.projectMakespan}h (kỳ vọng 14h) | T2 slack: ${t2?.slackTime}h (kỳ vọng 4h)`
@@ -327,13 +327,13 @@ async function runVerification() {
     const isEdge24Crit = isEdgeCritical(t2!, t4!);
 
     const edgeLogicOk = isEdge13Crit === true && isEdge34Crit === true && isEdge12Crit === false && isEdge24Crit === false;
-    record(
+    recordM2(
       'A.4: Nhận diện Critical Edge (Đường găng giữa các node)',
       edgeLogicOk,
       `T1->T3: ${isEdge13Crit}, T3->T4: ${isEdge34Crit}, T1->T2: ${isEdge12Crit}, T2->T4: ${isEdge24Crit}`
     );
   } catch (err: unknown) {
-    record('A.3 & A.4: CPM Calculation', false, String(err));
+    recordM2('A.3 & A.4: CPM Calculation', false, String(err));
   }
 
   // ============================================================
@@ -354,7 +354,7 @@ async function runVerification() {
 
   // Setup users via Register API
   try {
-    const regMemRes = await fetch(`${BASE_URL}/api/auth/register`, {
+    const regMemRes = await fetch(`${M2_BASE_URL}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -370,7 +370,7 @@ async function runVerification() {
     const regMemData = await regMemRes.json();
     memberToken = regMemData.data?.accessToken || '';
 
-    const regLeadRes = await fetch(`${BASE_URL}/api/auth/register`, {
+    const regLeadRes = await fetch(`${M2_BASE_URL}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -387,26 +387,26 @@ async function runVerification() {
     leaderToken = regLeadData.data?.accessToken || '';
     leaderId = regLeadData.data?.id || '';
 
-    record(
+    recordM2(
       'B.0: Khởi tạo tài khoản kiểm thử (Member & Leader)',
       Boolean(memberToken && leaderToken),
       `Member Token: ${Boolean(memberToken)} | Leader Token: ${Boolean(leaderToken)}`
     );
   } catch (err: unknown) {
-    record('B.0: Khởi tạo tài khoản kiểm thử', false, `Lỗi: ${String(err)}. Vui lòng đảm bảo dev server đang chạy.`);
+    recordM2('B.0: Khởi tạo tài khoản kiểm thử', false, `Lỗi: ${String(err)}. Vui lòng đảm bảo dev server đang chạy.`);
     return;
   }
 
   // Create Team & Project via REST APIs
   try {
-    const teamsRes = await fetch(`${BASE_URL}/api/teams`, {
+    const teamsRes = await fetch(`${M2_BASE_URL}/api/teams`, {
       headers: { Authorization: `Bearer ${leaderToken}` },
     });
     const teams = await teamsRes.json();
     if (Array.isArray(teams) && teams.length > 0) {
       testTeamId = teams[0].id;
     } else {
-      const createTeamRes = await fetch(`${BASE_URL}/api/teams`, {
+      const createTeamRes = await fetch(`${M2_BASE_URL}/api/teams`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -422,7 +422,7 @@ async function runVerification() {
       testTeamId = newTeam.id;
     }
 
-    const projRes = await fetch(`${BASE_URL}/api/projects`, {
+    const projRes = await fetch(`${M2_BASE_URL}/api/projects`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -441,13 +441,13 @@ async function runVerification() {
     const projData = await projRes.json();
     testProjectId = projData.id;
 
-    record(
+    recordM2(
       'B.1: Chuẩn bị Dự án mẫu qua API',
       Boolean(testProjectId),
       `Project ID: ${testProjectId} | Name: ${projData.name || 'OK'}`
     );
   } catch (err: unknown) {
-    record('B.1: Chuẩn bị Dự án mẫu', false, String(err));
+    recordM2('B.1: Chuẩn bị Dự án mẫu', false, String(err));
     return;
   }
 
@@ -455,7 +455,7 @@ async function runVerification() {
   // TEST B.2: RBAC MEMBER không có quyền phân rã dự án (403 Forbidden)
   // ------------------------------------------------------------
   try {
-    const res = await fetch(`${BASE_URL}/api/projects/${testProjectId}/decompose`, {
+    const res = await fetch(`${M2_BASE_URL}/api/projects/${testProjectId}/decompose`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -468,13 +468,13 @@ async function runVerification() {
     const data = await res.json();
     const passed = res.status === 403 && data.success === false;
 
-    record(
+    recordM2(
       'B.2: RBAC Chặn MEMBER phân rã dự án (403 Forbidden)',
       passed,
       `HTTP ${res.status} | Error: ${data.error?.message || 'Forbidden'}`
     );
   } catch (err: unknown) {
-    record('B.2: RBAC MEMBER decompose', false, String(err));
+    recordM2('B.2: RBAC MEMBER decompose', false, String(err));
   }
 
   // ------------------------------------------------------------
@@ -482,7 +482,7 @@ async function runVerification() {
   // ------------------------------------------------------------
   try {
     console.log('   ⏳ Đang gửi yêu cầu phân rã dự án (POST /decompose)...');
-    const res = await fetch(`${BASE_URL}/api/projects/${testProjectId}/decompose`, {
+    const res = await fetch(`${M2_BASE_URL}/api/projects/${testProjectId}/decompose`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -500,20 +500,20 @@ async function runVerification() {
       data.data?.projectMakespan > 0 &&
       data.data?.criticalTasksCount > 0;
 
-    record(
+    recordM2(
       'B.3: LEADER Phân rã dự án thành công (Atomic Transaction & CPM)',
       passed,
       `HTTP ${res.status} | Số tasks: ${data.data?.totalTasks} | Thời gian găng: ${data.data?.projectMakespan}h | Tasks găng: ${data.data?.criticalTasksCount}`
     );
   } catch (err: unknown) {
-    record('B.3: LEADER Decompose Project', false, String(err));
+    recordM2('B.3: LEADER Decompose Project', false, String(err));
   }
 
   // ------------------------------------------------------------
   // TEST B.4: Lấy đồ thị React Flow DAG (GET /api/projects/[id]/dag)
   // ------------------------------------------------------------
   try {
-    const res = await fetch(`${BASE_URL}/api/projects/${testProjectId}/dag`, {
+    const res = await fetch(`${M2_BASE_URL}/api/projects/${testProjectId}/dag`, {
       headers: {
         Authorization: `Bearer ${leaderToken}`,
       },
@@ -548,20 +548,20 @@ async function runVerification() {
       nodeValid &&
       edgeValid;
 
-    record(
+    recordM2(
       'B.4: GET /api/projects/[id]/dag trả về React Flow DAG chuẩn',
       passed,
       `HTTP ${res.status} | Nodes: ${dag?.nodes?.length} | Edges: ${dag?.edges?.length} | Critical Duration: ${dag?.projectMakespan}h`
     );
   } catch (err: unknown) {
-    record('B.4: GET DAG API', false, String(err));
+    recordM2('B.4: GET DAG API', false, String(err));
   }
 
   // ------------------------------------------------------------
   // TEST B.5: Kiểm tra Tasks & Dependencies qua Tasks API
   // ------------------------------------------------------------
   try {
-    const tasksRes = await fetch(`${BASE_URL}/api/tasks?projectId=${testProjectId}`, {
+    const tasksRes = await fetch(`${M2_BASE_URL}/api/tasks?projectId=${testProjectId}`, {
       headers: { Authorization: `Bearer ${leaderToken}` },
     });
     const tasks = await tasksRes.json();
@@ -571,20 +571,20 @@ async function runVerification() {
 
     const passed = hasTasks && hasCriticalTask;
 
-    record(
+    recordM2(
       'B.5: Kiểm tra Database lưu trữ đầy đủ Task, Slack và Phụ thuộc qua API',
       passed,
       `Tasks lấy từ API: ${tasks.length} | Có Task găng: ${hasCriticalTask}`
     );
   } catch (err: unknown) {
-    record('B.5: API Tasks Verification', false, String(err));
+    recordM2('B.5: API Tasks Verification', false, String(err));
   }
 
   // ------------------------------------------------------------
   // SUMMARY
   // ------------------------------------------------------------
-  const passedCount = results.filter((r) => r.passed).length;
-  const totalCount = results.length;
+  const passedCount = m2Results.filter((r) => r.passed).length;
+  const totalCount = m2Results.length;
 
   console.log(`\n============================================================`);
   console.log(`🎯 KẾT QUẢ ĐÁNH GIÁ MODULE 2 (DAG & CPM ENGINE):`);
@@ -597,7 +597,7 @@ async function runVerification() {
   console.log(`============================================================\n`);
 }
 
-runVerification().catch((e) => {
+runModule2Verification().catch((e) => {
   console.error('Lỗi ngoại lệ khi chạy verification:', e);
   process.exit(1);
 });
