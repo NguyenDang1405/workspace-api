@@ -388,4 +388,5 @@ async function runVerification() {
 }
 
 runVerification();
+export {};
 
