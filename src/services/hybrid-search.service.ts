@@ -42,11 +42,23 @@ interface RawQueryResult {
   activeWorkload: number | bigint;
 }
 
+interface TaskRecord {
+  id: string;
+  title: string;
+  description: string | null;
+  targetDepartment: string;
+  requiredLevel: string;
+  taskEmbedding: string | null;
+}
+
 /**
  * MOD-03: Hybrid Retrieval Engine
  * Executes Reciprocal Rank Fusion (RRF, k = 60) combining BM25 Full-Text Search
  * (search_vector with GIN index) and Cosine Vector Similarity (skill_embedding with HNSW)
  * within PostgreSQL 16.
+ *
+ * Utilizes pre-computed `tasks.task_embedding` if present (from MOD-02 decomposition)
+ * to achieve sub-30ms execution times without calling external embedding APIs at runtime.
  *
  * Enforces prerequisites:
  * 1. is_active = true
@@ -59,36 +71,53 @@ export async function searchCandidatesForTask(
   limit: number = 10,
   allowCrossDept: boolean = false
 ): Promise<RankedCandidateDto[]> {
-  // 1. Fetch task metadata
-  const task = await prisma.task.findUnique({
-    where: { id: taskId },
-    select: {
-      id: true,
-      title: true,
-      description: true,
-      targetDepartment: true,
-      requiredLevel: true,
-    },
-  });
+  // 1. Fetch task metadata and pre-computed task_embedding
+  const tasks = await prisma.$queryRaw<TaskRecord[]>`
+    SELECT 
+      id, 
+      title, 
+      description, 
+      target_department AS "targetDepartment", 
+      required_level AS "requiredLevel", 
+      task_embedding::text AS "taskEmbedding"
+    FROM tasks
+    WHERE id = ${taskId}::uuid
+    LIMIT 1;
+  `;
 
+  const task = tasks[0];
   if (!task) {
     throw new Error('TASK_NOT_FOUND');
   }
 
-  // 2. Generate Dense Query Vector (1536 dimensions) via OpenAI
-  const queryContext = `${task.title} ${task.description || ''}`.trim();
-  const queryEmbedding = await generateProfileEmbedding({
-    department: task.targetDepartment,
-    level: task.requiredLevel,
-    skills: [],
-    bioSummary: queryContext,
-  });
+  // 2. Retrieve dense query vector: use persisted task_embedding if available,
+  // else generate on-the-fly via OpenAI and persist for subsequent requests
+  let vectorString = task.taskEmbedding;
+  if (!vectorString) {
+    const queryContext = `${task.title} ${task.description || ''}`.trim();
+    const queryEmbedding = await generateProfileEmbedding({
+      department: task.targetDepartment,
+      level: task.requiredLevel,
+      skills: [],
+      bioSummary: queryContext,
+    });
 
-  if (!queryEmbedding || queryEmbedding.length === 0) {
-    throw new Error('EMBEDDING_GENERATION_FAILED');
+    if (!queryEmbedding || queryEmbedding.length === 0) {
+      throw new Error('EMBEDDING_GENERATION_FAILED');
+    }
+
+    vectorString = `[${queryEmbedding.join(',')}]`;
+
+    // Persist to database asynchronously to optimize future queries
+    prisma
+      .$executeRawUnsafe(
+        `UPDATE tasks SET task_embedding = $1::vector WHERE id = $2::uuid`,
+        vectorString,
+        task.id
+      )
+      .catch((err) => console.warn('Failed to cache task_embedding:', err));
   }
 
-  const vectorString = `[${queryEmbedding.join(',')}]`;
   const sparseQuery = buildSparseQueryString(task.title, task.description);
 
   // 3. Execute High-Performance SQL CTE with RRF (k = 60)
@@ -196,4 +225,3 @@ export async function searchCandidatesForTask(
     activeWorkload: Number(r.activeWorkload),
   }));
 }
-

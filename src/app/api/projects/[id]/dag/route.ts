@@ -57,7 +57,21 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
     const [tasks, dependencies] = await Promise.all([
       prisma.task.findMany({
         where: { projectId },
-        include: {
+        select: {
+          id: true,
+          title: true,
+          targetDepartment: true,
+          requiredLevel: true,
+          estimatedHours: true,
+          earlyStart: true,
+          earlyFinish: true,
+          lateStart: true,
+          lateFinish: true,
+          slackTime: true,
+          isCriticalPath: true,
+          status: true,
+          priority: true,
+          assignedTo: true,
           assignee: {
             select: {
               fullName: true,
