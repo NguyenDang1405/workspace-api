@@ -109,8 +109,19 @@ CREATE TABLE IF NOT EXISTS projects (
     CONSTRAINT chk_projects_status CHECK (status IN ('PLANNING', 'ACTIVE', 'COMPLETED', 'ARCHIVED'))
 );
 
+-- Bảng Tài liệu Dự án & RAG SRS Chunking (MOD-10)
+CREATE TABLE IF NOT EXISTS project_documents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    file_name VARCHAR(255) NOT NULL,
+    file_url TEXT NOT NULL,
+    raw_content TEXT,
+    extracted_stories JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ============================================================================
--- PHẦN 4: ĐỒ THỊ TÁC VỤ DAG & KANBAN (MOD-02, MOD-04, MOD-05)
+-- PHẦN 4: ĐỒ THỊ TÁC VỤ DAG & KANBAN (MOD-02, MOD-03, MOD-04, MOD-05, MOD-08)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS tasks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -123,10 +134,14 @@ CREATE TABLE IF NOT EXISTS tasks (
     target_department VARCHAR(50) NOT NULL DEFAULT 'FULLSTACK',
     required_level VARCHAR(20) NOT NULL DEFAULT 'JUNIOR',
     estimated_hours NUMERIC(4, 1) NOT NULL DEFAULT 4.0,
+    actual_hours NUMERIC(5, 2),
     status VARCHAR(20) NOT NULL DEFAULT 'SCHEDULED',
     checklist JSONB NOT NULL DEFAULT '[]'::jsonb,
     
-    -- Tham số Đường găng (CPM)
+    -- Véc-tơ ngữ nghĩa Task (MOD-03, MOD-04 HNSW)
+    task_embedding VECTOR(1536),
+    
+    -- Tham số Đường găng (CPM) (MOD-02)
     early_start NUMERIC(5, 1) DEFAULT 0.0,
     early_finish NUMERIC(5, 1) DEFAULT 0.0,
     late_start NUMERIC(5, 1) DEFAULT 0.0,
@@ -134,9 +149,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     slack_time NUMERIC(5, 1) DEFAULT 0.0,
     is_critical_path BOOLEAN NOT NULL DEFAULT false,
     
-    -- Tham số Quan trắc luồng việc (MOD-05 & MOD-08)
+    -- Tham số Quan trắc luồng việc & Little's Law (MOD-05 & MOD-08)
     started_at TIMESTAMPTZ,
+    in_review_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
+    due_date DATE,
     is_blocked BOOLEAN NOT NULL DEFAULT false,
     block_reason VARCHAR(255),
     
@@ -147,7 +164,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     CONSTRAINT chk_tasks_priority CHECK (priority IN ('LOW', 'MEDIUM', 'HIGH', 'URGENT')),
     CONSTRAINT chk_tasks_department CHECK (target_department IN ('FRONTEND', 'BACKEND', 'DEVOPS', 'QA', 'FULLSTACK')),
     CONSTRAINT chk_tasks_level CHECK (required_level IN ('INTERN', 'FRESHER', 'JUNIOR', 'MIDDLE', 'SENIOR')),
-    CONSTRAINT chk_tasks_hours CHECK (estimated_hours > 0)
+    CONSTRAINT chk_tasks_hours CHECK (estimated_hours > 0),
+    CONSTRAINT chk_tasks_actual_hours CHECK (actual_hours IS NULL OR actual_hours >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS task_dependencies (
@@ -161,8 +179,51 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
 );
 
 -- ============================================================================
--- PHẦN 5: CÁC MODULE MỞ RỘNG MỚI (MOD-06, MOD-07, MOD-08, MOD-09)
+-- PHẦN 5: ĐIỀU PHỐI THÍCH ỨNG & THỰC NGHIỆM ĐIỀU ĐỘ (MOD-04)
 -- ============================================================================
+CREATE TABLE IF NOT EXISTS dispatch_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    recommended_candidates JSONB NOT NULL,
+    chosen_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    is_human_override BOOLEAN NOT NULL DEFAULT false,
+    override_reason TEXT,
+    dispatched_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================================
+-- PHẦN 6: CÁC MODULE MỞ RỘNG (MOD-06, MOD-07, MOD-08, MOD-09)
+-- ============================================================================
+
+-- Bảng Điểm năng lực thích ứng Elo (MOD-06)
+CREATE TABLE IF NOT EXISTS user_skill_ratings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    skill_name VARCHAR(50) NOT NULL,
+    rating_score NUMERIC(6, 2) NOT NULL DEFAULT 1200.00,
+    tasks_completed INT NOT NULL DEFAULT 0,
+    tasks_rejected INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT uq_user_skill UNIQUE (user_id, skill_name),
+    CONSTRAINT chk_skill_name_not_blank CHECK (length(btrim(skill_name)) > 0)
+);
+
+-- Bảng Lưu vết Chuỗi thời gian Biến động Elo Skill Ratings (MOD-06)
+CREATE TABLE IF NOT EXISTS user_skill_rating_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    skill_name VARCHAR(50) NOT NULL,
+    task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+    old_rating NUMERIC(6, 2) NOT NULL,
+    new_rating NUMERIC(6, 2) NOT NULL,
+    delta NUMERIC(6, 2) NOT NULL,
+    event_type VARCHAR(20) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT chk_skill_log_event_type CHECK (event_type IN ('TASK_DONE', 'REVIEW_REJECT')),
+    CONSTRAINT chk_skill_log_name_not_blank CHECK (length(btrim(skill_name)) > 0)
+);
 
 -- Bảng tích hợp Git Webhook & AI Verify PR (MOD-07)
 CREATE TABLE IF NOT EXISTS git_pull_requests (
@@ -208,20 +269,6 @@ CREATE TABLE IF NOT EXISTS daily_standup_reports (
     CONSTRAINT uq_project_standup_date UNIQUE (project_id, report_date)
 );
 
--- Bảng Điểm năng lực thích ứng Elo (MOD-06)
-CREATE TABLE IF NOT EXISTS user_skill_ratings (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    skill_name VARCHAR(50) NOT NULL,
-    rating_score NUMERIC(6, 2) NOT NULL DEFAULT 1200.00,
-    tasks_completed INT NOT NULL DEFAULT 0,
-    tasks_rejected INT NOT NULL DEFAULT 0,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT uq_user_skill UNIQUE (user_id, skill_name),
-    CONSTRAINT chk_skill_name_not_blank CHECK (length(btrim(skill_name)) > 0)
-);
-
 -- Bảng Nhật ký Lịch sử chuyển trạng thái Task (MOD-05 / IQR & Little's Law)
 CREATE TABLE IF NOT EXISTS task_status_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -247,25 +294,36 @@ CREATE TABLE IF NOT EXISTS talent_audit_logs (
 );
 
 -- ============================================================================
--- PHẦN 6: CHỈ MỤC TỐI ƯU HÓA TRUY VẤN
+-- PHẦN 7: CHỈ MỤC TỐI ƯU HÓA TRUY VẤN
 -- ============================================================================
 CREATE INDEX IF NOT EXISTS idx_user_tokens_active ON user_tokens (user_id, expires_at DESC) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_talent_embedding_hnsw ON user_talent_profiles USING hnsw (skill_embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64) WHERE skill_embedding IS NOT NULL AND embedding_revision = profile_revision;
 CREATE INDEX IF NOT EXISTS idx_talent_fts_gin ON user_talent_profiles USING gin (search_vector);
 CREATE INDEX IF NOT EXISTS idx_talent_dispatch_filter ON user_talent_profiles (department, level, user_id);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_dispatch ON tasks(project_id, status) WHERE status = 'SCHEDULED';
 CREATE INDEX IF NOT EXISTS idx_tasks_kanban ON tasks(assigned_to, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_embedding_hnsw ON tasks USING hnsw (task_embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64) WHERE task_embedding IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_task_deps_succ ON task_dependencies(successor_id);
 CREATE INDEX IF NOT EXISTS idx_task_deps_pred ON task_dependencies(predecessor_id);
-CREATE INDEX IF NOT EXISTS idx_git_pr_task ON git_pull_requests(task_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_dispatch_history_task ON dispatch_history(task_id, dispatched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dispatch_history_user ON dispatch_history(chosen_user_id, dispatched_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_user_skills ON user_skill_ratings(user_id, skill_name);
+CREATE INDEX IF NOT EXISTS idx_user_skill_logs ON user_skill_rating_logs(user_id, skill_name, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_project_documents_project ON project_documents(project_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_git_pr_task ON git_pull_requests(task_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_history_lookup ON task_status_history(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_talent_audit_lookup ON talent_audit_logs(subject_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_projects_team_status ON projects(team_id, status);
 CREATE INDEX IF NOT EXISTS idx_team_members_active_user ON team_members(user_id, team_id);
 
 -- ============================================================================
--- PHẦN 7: HÀM & TRIGGER TỰ ĐỘNG HÓA
+-- PHẦN 8: HÀM & TRIGGER TỰ ĐỘNG HÓA
 -- ============================================================================
 CREATE OR REPLACE FUNCTION app_set_updated_at()
 RETURNS TRIGGER AS $$

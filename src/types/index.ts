@@ -220,3 +220,7 @@ export interface CycleTimeMetrics {
   iqrHours: number;
   averageHours: number;
 }
+
+// Re-export Retrieval & Candidate Ranking Types (MOD-03)
+export * from './retrieval.types';
+
