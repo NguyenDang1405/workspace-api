@@ -61,27 +61,29 @@ enum TaskStatus {
 }
 
 model User {
-  id             String              @id @default(uuid()) @db.Uuid
-  email          String              @unique @db.Citext
-  passwordHash   String              @map("hashed_password")
-  fullName       String              @map("full_name") @db.VarChar(100)
-  role           Role                @default(MEMBER)
-  avatarUrl      String?             @map("avatar_url")
-  isActive       Boolean             @default(true) @map("is_active")
-  authVersion    Int                 @default(1) @map("auth_version")
-  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt      DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  id                   String               @id @default(uuid()) @db.Uuid
+  email                String               @unique @db.Citext
+  passwordHash         String               @map("hashed_password")
+  fullName             String               @map("full_name") @db.VarChar(100)
+  role                 Role                 @default(MEMBER)
+  avatarUrl            String?              @map("avatar_url")
+  isActive             Boolean              @default(true) @map("is_active")
+  authVersion          Int                  @default(1) @map("auth_version")
+  createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  tokens         UserToken[]
-  talentProfile  UserTalentProfile?
-  ledTeams       Team[]              @relation("TeamLeader")
-  teamMemberships TeamMember[]
-  ownedProjects  Project[]           @relation("ProjectOwner")
-  assignedTasks  Task[]              @relation("TaskAssignee")
-  statusChanges  TaskStatusHistory[] @relation("StatusChanger")
-  skillRatings   UserSkillRating[]
-  auditSubject   TalentAuditLog[]    @relation("AuditSubject")
-  auditActor     TalentAuditLog[]    @relation("AuditActor")
+  tokens               UserToken[]
+  talentProfile        UserTalentProfile?
+  ledTeams             Team[]               @relation("TeamLeader")
+  teamMemberships      TeamMember[]
+  ownedProjects        Project[]            @relation("ProjectOwner")
+  assignedTasks        Task[]               @relation("TaskAssignee")
+  statusChanges        TaskStatusHistory[]  @relation("StatusChanger")
+  skillRatings         UserSkillRating[]
+  auditSubject         TalentAuditLog[]     @relation("AuditSubject")
+  auditActor           TalentAuditLog[]     @relation("AuditActor")
+  dispatchAssignments  DispatchHistory[]    @relation("ChosenUser")
+  skillRatingLogs      UserSkillRatingLog[]
 
   @@map("users")
 }
@@ -177,6 +179,7 @@ model Project {
   team                  Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
   owner                 User                 @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   tasks                 Task[]
+  documents             ProjectDocument[]
   reschedulingEvents    ReschedulingEvent[]
   standupReports        DailyStandupReport[]
 
@@ -184,43 +187,66 @@ model Project {
   @@map("projects")
 }
 
-model Task {
-  id                   String              @id @default(uuid()) @db.Uuid
-  projectId            String              @map("project_id") @db.Uuid
-  parentTaskId         String?             @map("parent_task_id") @db.Uuid
-  title                String              @db.VarChar(255)
-  description          String              @db.Text
-  priority             TaskPriority        @default(MEDIUM)
-  targetDepartment     Department          @default(FULLSTACK) @map("target_department")
-  requiredLevel        Level               @default(JUNIOR) @map("required_level")
-  estimatedHours       Decimal             @default(4.0) @map("estimated_hours") @db.Decimal(4, 1)
-  status               TaskStatus          @default(SCHEDULED)
-  assignedTo           String?             @map("assigned_to") @db.Uuid
-  checklist            Json                @default("[]")
-  
-  // Tham số Đường găng (CPM)
-  earlyStart           Decimal             @default(0.0) @map("early_start") @db.Decimal(5, 1)
-  earlyFinish          Decimal             @default(0.0) @map("early_finish") @db.Decimal(5, 1)
-  lateStart            Decimal             @default(0.0) @map("late_start") @db.Decimal(5, 1)
-  lateFinish           Decimal             @default(0.0) @map("late_finish") @db.Decimal(5, 1)
-  slackTime            Decimal             @default(0.0) @map("slack_time") @db.Decimal(5, 1)
-  isCriticalPath       Boolean             @default(false) @map("is_critical_path")
-  
-  // Tham số Quan trắc luồng việc (Flow Observability)
-  startedAt            DateTime?           @map("started_at") @db.Timestamptz
-  completedAt          DateTime?           @map("completed_at") @db.Timestamptz
-  isBlocked            Boolean             @default(false) @map("is_blocked")
-  blockReason          String?             @map("block_reason") @db.VarChar(255)
-  
-  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt            DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+model ProjectDocument {
+  id               String   @id @default(uuid()) @db.Uuid
+  projectId        String   @map("project_id") @db.Uuid
+  fileName         String   @map("file_name") @db.VarChar(255)
+  fileUrl          String   @map("file_url") @db.Text
+  rawContent       String?  @map("raw_content") @db.Text
+  extractedStories Json?    @map("extracted_stories")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  project              Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  parentTask           Task?               @relation("TaskHierarchy", fields: [parentTaskId], references: [id], onDelete: Cascade)
-  subTasks             Task[]              @relation("TaskHierarchy")
-  assignee             User?               @relation("TaskAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
-  dependencies         TaskDependency[]    @relation("SuccessorTasks")
-  dependents           TaskDependency[]    @relation("PredecessorTasks")
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt(sort: Desc)], map: "idx_project_documents_project")
+  @@map("project_documents")
+}
+
+model Task {
+  id                   String               @id @default(uuid()) @db.Uuid
+  projectId            String               @map("project_id") @db.Uuid
+  parentTaskId         String?              @map("parent_task_id") @db.Uuid
+  title                String               @db.VarChar(255)
+  description          String               @db.Text
+  priority             TaskPriority         @default(MEDIUM)
+  targetDepartment     Department           @default(FULLSTACK) @map("target_department")
+  requiredLevel        Level                @default(JUNIOR) @map("required_level")
+  estimatedHours       Decimal              @default(4.0) @map("estimated_hours") @db.Decimal(4, 1)
+  actualHours          Decimal?             @map("actual_hours") @db.Decimal(5, 2)
+  status               TaskStatus           @default(SCHEDULED)
+  assignedTo           String?              @map("assigned_to") @db.Uuid
+  checklist            Json                 @default("[]")
+  
+  // Véc-tơ ngữ nghĩa Task (MOD-03, MOD-04 HNSW)
+  taskEmbedding        Unsupported("vector(1536)")? @map("task_embedding")
+  
+  // Tham số Đường găng (CPM) (MOD-02)
+  earlyStart           Decimal              @default(0.0) @map("early_start") @db.Decimal(5, 1)
+  earlyFinish          Decimal              @default(0.0) @map("early_finish") @db.Decimal(5, 1)
+  lateStart            Decimal              @default(0.0) @map("late_start") @db.Decimal(5, 1)
+  lateFinish           Decimal              @default(0.0) @map("late_finish") @db.Decimal(5, 1)
+  slackTime            Decimal              @default(0.0) @map("slack_time") @db.Decimal(5, 1)
+  isCriticalPath       Boolean              @default(false) @map("is_critical_path")
+  
+  // Tham số Quan trắc luồng việc & Little's Law (MOD-05 & MOD-08)
+  startedAt            DateTime?            @map("started_at") @db.Timestamptz
+  inReviewAt           DateTime?            @map("in_review_at") @db.Timestamptz
+  completedAt          DateTime?            @map("completed_at") @db.Timestamptz
+  dueDate              DateTime?            @map("due_date") @db.Date
+  isBlocked            Boolean              @default(false) @map("is_blocked")
+  blockReason          String?              @map("block_reason") @db.VarChar(255)
+  
+  createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  project              Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parentTask           Task?                @relation("TaskHierarchy", fields: [parentTaskId], references: [id], onDelete: Cascade)
+  subTasks             Task[]               @relation("TaskHierarchy")
+  assignee             User?                @relation("TaskAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+  dependencies         TaskDependency[]     @relation("SuccessorTasks")
+  dependents           TaskDependency[]     @relation("PredecessorTasks")
+  dispatchHistories    DispatchHistory[]
+  skillRatingLogs      UserSkillRatingLog[]
   gitPRs               GitPullRequest[]
   statusHistories      TaskStatusHistory[]
   triggeredReschedules ReschedulingEvent[]
@@ -243,6 +269,23 @@ model TaskDependency {
   @@index([successorId], map: "idx_task_deps_succ")
   @@index([predecessorId], map: "idx_task_deps_pred")
   @@map("task_dependencies")
+}
+
+model DispatchHistory {
+  id                    String   @id @default(uuid()) @db.Uuid
+  taskId                String   @map("task_id") @db.Uuid
+  recommendedCandidates Json     @map("recommended_candidates")
+  chosenUserId          String   @map("chosen_user_id") @db.Uuid
+  isHumanOverride       Boolean  @default(false) @map("is_human_override")
+  overrideReason        String?  @map("override_reason") @db.Text
+  dispatchedAt          DateTime @default(now()) @map("dispatched_at") @db.Timestamptz
+
+  task                  Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  chosenUser            User     @relation("ChosenUser", fields: [chosenUserId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, dispatchedAt(sort: Desc)], map: "idx_dispatch_history_task")
+  @@index([chosenUserId, dispatchedAt(sort: Desc)], map: "idx_dispatch_history_user")
+  @@map("dispatch_history")
 }
 
 model GitPullRequest {
@@ -311,6 +354,24 @@ model UserSkillRating {
   @@unique([userId, skillName], map: "uq_user_skill")
   @@index([userId, skillName], map: "idx_user_skills")
   @@map("user_skill_ratings")
+}
+
+model UserSkillRatingLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  skillName String   @map("skill_name") @db.VarChar(50)
+  taskId    String?  @map("task_id") @db.Uuid
+  oldRating Decimal  @map("old_rating") @db.Decimal(6, 2)
+  newRating Decimal  @map("new_rating") @db.Decimal(6, 2)
+  delta     Decimal  @map("delta") @db.Decimal(6, 2)
+  eventType String   @map("event_type") @db.VarChar(20)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task      Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([userId, skillName, createdAt(sort: Desc)], map: "idx_user_skill_logs")
+  @@map("user_skill_rating_logs")
 }
 
 model TaskStatusHistory {
