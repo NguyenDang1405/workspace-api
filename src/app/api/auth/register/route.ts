@@ -34,6 +34,7 @@ export async function POST(request: Request) {
           email: validatedData.email,
           passwordHash,
           fullName: validatedData.fullName,
+          avatarUrl: validatedData.avatarUrl || null,
           role: validatedData.role,
         },
       });
@@ -65,6 +66,7 @@ export async function POST(request: Request) {
         id: user.id,
         email: user.email,
         fullName: user.fullName,
+        avatarUrl: user.avatarUrl,
         role: user.role,
         accessToken,
       },

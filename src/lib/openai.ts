@@ -53,3 +53,33 @@ export async function generateProfileEmbedding(data: {
     return null;
   }
 }
+
+/**
+ * Generate a 1536-dimensional embedding specifically for tasks (MOD-02 / MOD-03).
+ * Uses context: `${title} ${description}`.
+ * Returns number[] on success, or null on error/timeout.
+ */
+export async function generateTaskEmbedding(
+  title: string,
+  description?: string | null
+): Promise<number[] | null> {
+  const context = `${title} ${description || ''}`.trim();
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    const response = await openai.embeddings.create(
+      {
+        model: 'text-embedding-3-small',
+        input: context,
+      },
+      { signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+
+    return response.data[0]?.embedding ?? null;
+  } catch (error) {
+    console.error('Error generating task embedding:', error);
+    return null;
+  }
+}

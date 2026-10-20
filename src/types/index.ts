@@ -34,6 +34,7 @@ export const RegisterSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
   fullName: z.string().min(1).max(100, 'Full name cannot exceed 100 characters'),
+  avatarUrl: z.string().url().nullable().optional(),
   role: z.enum(['ADMIN', 'PM', 'LEADER', 'MEMBER']).optional().default('MEMBER'),
   department: z.enum(['FRONTEND', 'BACKEND', 'DEVOPS', 'QA', 'FULLSTACK']).optional().default('FULLSTACK'),
   level: z.enum(['INTERN', 'FRESHER', 'JUNIOR', 'MIDDLE', 'SENIOR']).optional().default('JUNIOR'),
@@ -75,6 +76,26 @@ export const UserDtoSchema = z.object({
 });
 export type UserDto = z.infer<typeof UserDtoSchema>;
 export type UserResponseDto = UserDto;
+
+export const AuthMeDtoSchema = z.object({
+  id: z.string(),
+  email: z.string().email(),
+  fullName: z.string(),
+  avatarUrl: z.string().nullable().optional(),
+  role: z.enum(['ADMIN', 'PM', 'LEADER', 'MEMBER']),
+  isActive: z.boolean(),
+  authVersion: z.number().int().optional(),
+  department: z.enum(['FRONTEND', 'BACKEND', 'DEVOPS', 'QA', 'FULLSTACK']).optional(),
+  level: z.enum(['INTERN', 'FRESHER', 'JUNIOR', 'MIDDLE', 'SENIOR']).optional(),
+  skills: z.array(z.string()).optional(),
+  bioSummary: z.string().nullable().optional(),
+  profileRevision: z.number().optional(),
+  embeddingRevision: z.number().optional(),
+  isEmbeddingStale: z.boolean().optional(),
+  team: z.object({ id: z.string(), name: z.string() }).nullable().optional(),
+  createdAt: z.string().or(z.date()).optional(),
+});
+export type AuthMeDto = z.infer<typeof AuthMeDtoSchema>;
 
 // ==========================================
 // 4. ENTITY RESPONSES

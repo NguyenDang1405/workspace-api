@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { openai } from '@/lib/openai';
+import { openai, generateTaskEmbedding } from '@/lib/openai';
 import { zodResponseFormat } from 'openai/helpers/zod';
 import {
   DecomposeProjectResponseSchema,
@@ -224,7 +224,12 @@ ${userInstructions ? `- Yêu cầu bổ sung của quản lý: ${userInstruction
       throw algError;
     }
 
-    // 5. Atomic PostgreSQL Transaction: Persist Tasks & Dependencies
+    // 5. Generate Semantic Vector Embeddings for Each Task (1536 dims, parallel)
+    const embeddings = await Promise.all(
+      generatedTasks.map((t) => generateTaskEmbedding(t.title, t.description))
+    );
+
+    // 6. Atomic PostgreSQL Transaction: Persist Tasks & Dependencies
     const idMap = new Map<string, string>(); // tempId -> Database UUID
     generatedTasks.forEach((t) => {
       idMap.set(t.tempId, crypto.randomUUID());
@@ -243,6 +248,7 @@ ${userInstructions ? `- Yêu cầu bổ sung của quản lý: ${userInstruction
         targetDepartment: t.targetDepartment,
         requiredLevel: t.requiredLevel,
         estimatedHours: new Prisma.Decimal(t.estimatedHours),
+        actualHours: null,
         status: 'SCHEDULED' as const,
         checklist: [],
         earlyStart: new Prisma.Decimal(cpm.earlyStart),
@@ -251,6 +257,8 @@ ${userInstructions ? `- Yêu cầu bổ sung của quản lý: ${userInstruction
         lateFinish: new Prisma.Decimal(cpm.lateFinish),
         slackTime: new Prisma.Decimal(cpm.slackTime),
         isCriticalPath: cpm.isCriticalPath,
+        dueDate: null,
+        inReviewAt: null,
       };
     });
 
@@ -285,7 +293,20 @@ ${userInstructions ? `- Yêu cầu bổ sung của quản lý: ${userInstruction
         data: tasksToInsert,
       });
 
-      // 3. Insert dependencies batch
+      // 3. Persist semantic embeddings directly into task_embedding vector column
+      for (let i = 0; i < tasksToInsert.length; i++) {
+        const emb = embeddings[i];
+        if (emb && emb.length === 1536) {
+          const vectorStr = `[${emb.join(',')}]`;
+          await tx.$executeRawUnsafe(
+            `UPDATE tasks SET task_embedding = $1::vector WHERE id = $2::uuid`,
+            vectorStr,
+            tasksToInsert[i].id
+          );
+        }
+      }
+
+      // 4. Insert dependencies batch
       if (dependenciesToInsert.length > 0) {
         await tx.taskDependency.createMany({
           data: dependenciesToInsert,

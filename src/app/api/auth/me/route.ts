@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
         avatarUrl: true,
         role: true,
         isActive: true,
+        authVersion: true,
         createdAt: true,
         talentProfile: {
           select: {
@@ -79,6 +80,7 @@ export async function GET(request: NextRequest) {
         avatarUrl: user.avatarUrl,
         role: user.role,
         isActive: user.isActive,
+        authVersion: user.authVersion,
         department: user.talentProfile?.department || 'FULLSTACK',
         level: user.talentProfile?.level || 'JUNIOR',
         skills: user.talentProfile?.skills || [],
