@@ -93,6 +93,11 @@ export async function GET(request: NextRequest) {
           : 0,
         isEmbeddingStale: user.talentProfile?.isEmbeddingStale ?? false,
         team: user.teamMemberships[0]?.team || null,
+        permissions: {
+          canDecomposeProject: ['ADMIN', 'PM', 'LEADER'].includes(user.role),
+          canDispatch: ['ADMIN', 'PM', 'LEADER'].includes(user.role),
+          canApproveTask: ['ADMIN', 'PM', 'LEADER'].includes(user.role),
+        },
         createdAt: user.createdAt,
       },
     };
