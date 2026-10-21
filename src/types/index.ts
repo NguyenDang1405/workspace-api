@@ -72,6 +72,11 @@ export const UserDtoSchema = z.object({
   skills: z.array(z.string()).optional(),
   bioSummary: z.string().nullable().optional(),
   team: z.object({ id: z.string(), name: z.string() }).nullable().optional(),
+  permissions: z.object({
+    canDecomposeProject: z.boolean(),
+    canDispatch: z.boolean(),
+    canApproveTask: z.boolean(),
+  }).optional(),
   createdAt: z.string().or(z.date()).optional(),
 });
 export type UserDto = z.infer<typeof UserDtoSchema>;
@@ -93,6 +98,11 @@ export const AuthMeDtoSchema = z.object({
   embeddingRevision: z.number().optional(),
   isEmbeddingStale: z.boolean().optional(),
   team: z.object({ id: z.string(), name: z.string() }).nullable().optional(),
+  permissions: z.object({
+    canDecomposeProject: z.boolean(),
+    canDispatch: z.boolean(),
+    canApproveTask: z.boolean(),
+  }).optional(),
   createdAt: z.string().or(z.date()).optional(),
 });
 export type AuthMeDto = z.infer<typeof AuthMeDtoSchema>;
@@ -245,4 +255,5 @@ export interface CycleTimeMetrics {
 // Re-export Retrieval & Candidate Ranking Types (MOD-03)
 export * from './retrieval.types';
 export * from './dispatch.types';
+export * from './kanban.types';
 

@@ -11,7 +11,9 @@
     "verify:module1": "ts-node -T scripts/verify-module1.ts",
     "verify:module2": "ts-node -T scripts/verify-module2.ts",
     "verify:module3": "ts-node -T scripts/verify-module3.ts",
-    "test:module4": "ts-node -T test/mod-04-dispatch.test.ts"
+    "test:module4": "ts-node -T test/mod-04-dispatch.test.ts",
+    "test:module5": "ts-node -T test/mod-05-kanban.test.ts",
+    "test:all": "tsx scripts/test-all-apis.ts"
   },
   "prisma": {
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
