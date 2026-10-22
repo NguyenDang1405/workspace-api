@@ -14,6 +14,7 @@
     "test:module4": "ts-node -T test/mod-04-dispatch.test.ts",
     "test:module5": "ts-node -T test/mod-05-kanban.test.ts",
     "test:module6": "ts-node -T test/mod-06-elo.test.ts",
+    "test:module7": "ts-node -T test/mod-07-git.test.ts",
     "test:all": "ts-node -T scripts/test-all-apis.ts"
   },
   "prisma": {

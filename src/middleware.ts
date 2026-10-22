@@ -7,6 +7,7 @@ const PUBLIC_API_WHITELIST = [
   '/api/auth/refresh',
   '/api/auth/logout',
   '/api/health',
+  '/api/webhooks/github',
 ];
 
 const UI_PROTECTED_PREFIXES = ['/projects', '/teams', '/profile'];
