@@ -6,7 +6,7 @@ import { ApiResponse } from '@/types';
 
 export const dynamic = 'force-dynamic';
 
-export const GITHUB_WEBHOOK_SECRET =
+const GITHUB_WEBHOOK_SECRET =
   process.env.GITHUB_WEBHOOK_SECRET ||
   process.env.WEBHOOK_SECRET ||
   'smart-workspace-webhook-secret-key';
