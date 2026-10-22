@@ -260,3 +260,6 @@ export * from './elo.types';
 export * from './git.types';
 export * from './rescheduling.types';
 
+export * from './standup.types';
+export * from './standup.types';
+
