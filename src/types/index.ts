@@ -256,4 +256,5 @@ export interface CycleTimeMetrics {
 export * from './retrieval.types';
 export * from './dispatch.types';
 export * from './kanban.types';
+export * from './elo.types';
 
