@@ -45,44 +45,7 @@ export async function verifyCodeWithAI(
   checklist: any[],
   diffSummary: string
 ): Promise<AIVerificationResult> {
-  const prompt = `Bạn là Senior Technical Reviewer. Hãy thẩm định bản tóm tắt thay đổi mã nguồn (git diff/commits) của một Pull Request:
-Yêu cầu Task: ${taskTitle}
-Mô tả Task: ${taskDescription}
-Checklist kỹ thuật cần đạt: ${JSON.stringify(checklist)}
-
-Mã nguồn / Thay đổi:
-${diffSummary}
-
-Hãy đánh giá xem PR này đã đáp ứng checklist ở mức độ nào.
-Trả về JSON chuẩn format:
-{
-  "score": <số nguyên từ 0 đến 100>,
-  "isVerified": <boolean, true nếu score >= 70 và đáp ứng yêu cầu cơ bản>,
-  "feedback": "<nhận xét súc tích: điểm đạt, điểm thiếu sót nếu có>"
-}`;
-
-  try {
-    const res = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      response_format: { type: 'json_object' },
-      temperature: 0.1,
-    });
-
-    const parsed = JSON.parse(res.choices[0].message.content || '{}');
-    return {
-      score: typeof parsed.score === 'number' ? parsed.score : 80,
-      isVerified: Boolean(parsed.isVerified),
-      feedback: parsed.feedback || 'Mã nguồn đáp ứng các tiêu chuẩn kỹ thuật của task.',
-    };
-  } catch (err) {
-    console.warn('[AI PR Verification Warning - Falling back to heuristic assessment]:', err);
-    return {
-      score: 75,
-      isVerified: true,
-      feedback: 'Mã nguồn đã được ghi nhận và liên kết thành công với task. Đạt chuẩn cấu trúc cơ bản.',
-    };
-  }
+  return verifyCodeViaAdapter(taskTitle, taskDescription, checklist, diffSummary);
 }
 
 /**
