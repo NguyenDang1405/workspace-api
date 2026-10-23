@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma';
-import { openai } from '@/lib/openai';
+import { generateAdaptiveChecklist as generateChecklistViaAI } from '@/lib/openai';
 import { searchCandidatesForTask } from './hybrid-search.service';
 import {
   DispatchScoredCandidate,
@@ -236,64 +236,10 @@ export async function generateAdaptiveChecklist(
   taskDescription: string,
   userLevel: string
 ): Promise<AdaptiveChecklistItem[]> {
-  const upperLevel = userLevel.toUpperCase();
-  const prompt = `Bạn là Technical Leader. Hãy tạo danh sách công việc kiểm tra (checklist) định dạng JSON cho một lập trình viên cấp bậc ${upperLevel} thực hiện task:
-Tiêu đề: ${taskTitle}
-Mô tả: ${taskDescription}
-
-Yêu cầu cấu trúc số lượng items bắt buộc:
-- Nếu cấp bậc là INTERN hoặc FRESHER: Tạo từ 5 đến 7 mục chi tiết, kèm lưu ý về clean code, convention và viết test.
-- Nếu cấp bậc là JUNIOR hoặc MIDDLE: Tạo từ 3 đến 5 mục tập trung vào edge cases, validation, xử lý ngoại lệ.
-- Nếu cấp bậc là SENIOR: Tạo từ 2 đến 3 mục kiến trúc cấp cao, benchmark hiệu năng, bảo mật.
-
-Chỉ trả về JSON thuần túy có cấu trúc: {"items": [{"id": "chk-1", "taskText": "...", "category": "PREREQUISITE" | "IMPLEMENTATION" | "TESTING" | "SECURITY"}]}`;
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-
-    const res = await openai.chat.completions.create(
-      {
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' },
-        temperature: 0.2,
-      },
-      { signal: controller.signal }
-    );
-    clearTimeout(timeoutId);
-
-    const parsed = JSON.parse(res.choices[0]?.message?.content || '{}');
-    const items = parsed.items;
-
-    if (Array.isArray(items) && items.length > 0) {
-      // Validate item count according to level constraints
-      const count = items.length;
-      let validCount = false;
-      if ((upperLevel === 'INTERN' || upperLevel === 'FRESHER') && count >= 5 && count <= 7) {
-        validCount = true;
-      } else if ((upperLevel === 'JUNIOR' || upperLevel === 'MIDDLE') && count >= 3 && count <= 5) {
-        validCount = true;
-      } else if (upperLevel === 'SENIOR' && count >= 2 && count <= 3) {
-        validCount = true;
-      }
-
-      if (validCount) {
-        return items.map((it: { id?: string; taskText: string; category?: ChecklistCategory }, idx: number) => ({
-          id: it.id || `chk-${idx + 1}`,
-          taskText: String(it.taskText || `Công việc #${idx + 1}`),
-          isCompleted: false,
-          category: (['PREREQUISITE', 'IMPLEMENTATION', 'TESTING', 'SECURITY'].includes(it.category || '')
-            ? it.category
-            : 'IMPLEMENTATION') as ChecklistCategory,
-        }));
-      }
-    }
-
-    return getFallbackChecklist(userLevel);
-  } catch (err) {
-    console.warn('[Adaptive Checklist Warning - using deterministic fallback]:', err);
-    return getFallbackChecklist(userLevel);
+  const result = await generateChecklistViaAI(taskTitle, taskDescription, userLevel);
+  if (result && result.length > 0) {
+    return result;
   }
+  return getFallbackChecklist(userLevel);
 }
 

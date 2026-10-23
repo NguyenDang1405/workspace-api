@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import OpenAI from 'openai';
 import { FlowMetricsSnapshot, StandupReportDto } from '@/types/standup.types';
+import { generateDailyStandupAI } from '@/lib/openai';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'dummy-key-for-build',
@@ -158,36 +159,12 @@ export async function generateDailyStandupForProject(
           .join('; ')}. Cần ưu tiên phối hợp tháo gỡ.`
       : 'Không có điểm nghẽn nào được ghi nhận.';
 
-  // 4. Call OpenAI gpt-4o-mini
+  // 4. Call AI Microservice via Adapter
   try {
-    const prompt = `Bạn là Trợ lý AI Scrum Master chuyên nghiệp. Dựa vào dữ liệu thực tế 24 giờ qua của dự án "${project.name}":
-${JSON.stringify(contextData, null, 2)}
-
-Hãy tổng hợp bản báo cáo Daily Standup ngắn gọn, chuyên nghiệp và có giá trị hành động cao.
-Định dạng trả về JSON bắt buộc:
-{
-  "summaryYesterday": "<Tóm tắt 2-3 câu các task đã chuyển trạng thái hoặc PRs đã tạo/merge>",
-  "planToday": "<Tóm tắt 2-3 câu trọng tâm công việc hôm nay, nhấn mạnh các task đường găng critical path>",
-  "identifiedBlockers": "<Liệt kê cụ thể từng điểm nghẽn kèm nguyên nhân, hoặc ghi 'Không có điểm nghẽn nào được ghi nhận' nếu không có task nghẽn>"
-}`;
-
-    const aiRes = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      response_format: { type: 'json_object' },
-      temperature: 0.2,
-    });
-
-    const parsed = JSON.parse(aiRes.choices[0].message.content || '{}');
-    if (parsed.summaryYesterday && typeof parsed.summaryYesterday === 'string') {
-      summaryYesterday = parsed.summaryYesterday;
-    }
-    if (parsed.planToday && typeof parsed.planToday === 'string') {
-      planToday = parsed.planToday;
-    }
-    if (parsed.identifiedBlockers && typeof parsed.identifiedBlockers === 'string') {
-      identifiedBlockers = parsed.identifiedBlockers;
-    }
+    const aiResult = await generateDailyStandupAI(contextData);
+    if (aiResult.summaryYesterday) summaryYesterday = aiResult.summaryYesterday;
+    if (aiResult.planToday) planToday = aiResult.planToday;
+    if (aiResult.identifiedBlockers) identifiedBlockers = aiResult.identifiedBlockers;
   } catch (err) {
     console.warn('[Standup LLM Warning - Falling back to heuristic summary]:', err);
   }

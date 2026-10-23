@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import OpenAI from 'openai';
 import { AIVerificationResult, GithubWebhookPayload } from '@/types/git.types';
+import { verifyCodeWithAI as verifyCodeViaAdapter } from '@/lib/openai';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'dummy-key-for-build',

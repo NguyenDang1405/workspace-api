@@ -10,7 +10,7 @@ import {
 } from '@/types/srs.types';
 import { TaskNodeInput } from '@/types/dag.types';
 import { runKahnAndCPM } from '@/services/cpm.service';
-import { generateTaskEmbedding } from '@/lib/openai';
+import { generateTaskEmbedding, extractUserStoriesAI } from '@/lib/openai';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'dummy-key-for-build',
@@ -82,72 +82,23 @@ export function chunkTextRecursively(
  * @returns Array of validated User Stories
  */
 export async function extractUserStoriesFromSRS(rawContent: string): Promise<UserStoryDto[]> {
-  const chunks = chunkTextRecursively(rawContent, 2000, 200);
-  const sampleContext = chunks.slice(0, 3).join('\n\n---\n\n');
-
-  const prompt = `Bạn là Chuyên gia Phân tích Nghiệp vụ Phần mềm (Lead Business Analyst).
-Hãy đọc tài liệu đặc tả yêu cầu kỹ thuật (SRS) dưới đây và trích xuất danh sách các User Stories chuẩn Agile / INVEST:
-${sampleContext}
-
-Yêu cầu định dạng đầu ra JSON bắt buộc:
-{
-  "stories": [
-    {
-      "storyId": "US-01",
-      "role": "Người dùng",
-      "action": "đăng ký và kích hoạt tài khoản",
-      "benefit": "có thể truy cập vào không gian làm việc an toàn",
-      "fullTitle": "Đăng ký tài khoản và xác thực phiên",
-      "description": "Cài đặt luồng đăng ký, băm mật khẩu, cấp JWT token và lưu vết",
-      "targetDepartment": "BACKEND",
-      "complexity": "MEDIUM",
-      "acceptanceCriteria": [
-        "Mật khẩu phải tối thiểu 8 ký tự",
-        "Email trùng lặp trả về HTTP 409",
-        "Tạo bản ghi talent profile đi kèm"
-      ],
-      "dependsOnStories": []
-    }
-  ]
-}`;
-
   try {
-    const res = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      response_format: { type: 'json_object' },
-      temperature: 0.2,
-    });
-
-    const parsed = JSON.parse(res.choices[0].message.content || '{}');
-    if (Array.isArray(parsed.stories) && parsed.stories.length > 0) {
-      return parsed.stories.map((s: any, idx: number) => ({
-        storyId: s.storyId || `US-0${idx + 1}`,
-        role: s.role || 'Người dùng',
-        action: s.action || 'thực thi tác vụ hệ thống',
-        benefit: s.benefit || 'nâng cao hiệu năng vận hành',
-        fullTitle: s.fullTitle || `User Story ${idx + 1}`,
-        description: s.description || 'Đặc tả yêu cầu phần mềm',
-        targetDepartment: [
-          'FRONTEND',
-          'BACKEND',
-          'DEVOPS',
-          'QA',
-          'FULLSTACK',
-        ].includes(s.targetDepartment)
-          ? s.targetDepartment
-          : 'BACKEND',
-        complexity: ['EASY', 'MEDIUM', 'HARD'].includes(s.complexity)
-          ? s.complexity
-          : 'MEDIUM',
-        acceptanceCriteria:
-          Array.isArray(s.acceptanceCriteria) && s.acceptanceCriteria.length > 0
-            ? s.acceptanceCriteria
-            : ['Thỏa mãn các tiêu chuẩn kỹ thuật'],
-        dependsOnStories: Array.isArray(s.dependsOnStories) ? s.dependsOnStories : [],
+    const stories = await extractUserStoriesAI(rawContent);
+    if (stories && stories.length > 0) {
+      return stories.map((s) => ({
+        storyId: s.storyId,
+        role: s.role,
+        action: s.action,
+        benefit: s.benefit,
+        fullTitle: s.fullTitle,
+        description: s.description,
+        targetDepartment: s.targetDepartment,
+        complexity: s.complexity,
+        acceptanceCriteria: s.acceptanceCriteria,
+        dependsOnStories: s.dependsOnStories,
       }));
     }
-    throw new Error('Empty stories returned from OpenAI');
+    throw new Error('Empty stories returned from AI Microservice');
   } catch (err) {
     console.warn('[SRS Extraction Warning - Falling back to structured heuristic stories]:', err);
     return [

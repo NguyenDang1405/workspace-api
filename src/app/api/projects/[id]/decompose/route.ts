@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { openai, generateTaskEmbedding } from '@/lib/openai';
+import { openai, generateTaskEmbedding, extractUserStoriesAI } from '@/lib/openai';
 import { zodResponseFormat } from 'openai/helpers/zod';
 import {
   DecomposeProjectResponseSchema,
@@ -151,21 +151,8 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       // Body is optional
     }
 
-    // 3. Call OpenAI Structured Outputs (with Graceful Fallback)
+    // 3. Call AI Microservice for Decomposition (with Graceful Fallback)
     let generatedTasks: TaskItemGenerated[] = [];
-
-    const systemPrompt = `Bạn là Giám đốc Kỹ thuật (Technical Architect & PMP Specialist).
-Nhiệm vụ của bạn là phân rã dự án phần mềm thành danh sách từ 5 đến 15 tác vụ kỹ thuật theo cấu trúc Đồ thị có hướng không chu trình (DAG).
-Yêu cầu bắt buộc:
-1. Mỗi tác vụ phải có tempId định dạng T1, T2, T3...
-2. title và description thể hiện rõ mục tiêu kỹ thuật.
-3. targetDepartment thuộc một trong: FRONTEND, BACKEND, DEVOPS, QA, FULLSTACK.
-4. requiredLevel thuộc một trong: INTERN, FRESHER, JUNIOR, MIDDLE, SENIOR.
-5. priority: LOW, MEDIUM, HIGH, URGENT.
-6. estimatedHours: thời lượng ước tính từ 1 đến 40 giờ.
-7. predecessorTempIds: mảng chứa các tempId của những task phải HOÀN THÀNH TRƯỚC task này.
-   - Luôn tuân thủ logic tự nhiên: Database trước Backend API, Backend trước Frontend Integration, Dev hoàn thiện trước E2E QA.
-   - TUYỆT ĐỐI KHÔNG TẠO CHU TRÌNH VÒNG TRÒN (A phụ thuộc B và B phụ thuộc A).`;
 
     const userMessage = `Dự án cần phân rã:
 - Tên dự án: ${project.name}
@@ -175,26 +162,28 @@ Yêu cầu bắt buộc:
 ${userInstructions ? `- Yêu cầu bổ sung của quản lý: ${userInstructions}` : ''}`;
 
     try {
-      const completion = await openai.beta.chat.completions.parse({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-        response_format: zodResponseFormat(
-          DecomposeProjectResponseSchema,
-          'project_decomposition'
-        ),
-      });
+      const stories = await extractUserStoriesAI(userMessage);
+      if (stories && stories.length >= 3) {
+        generatedTasks = stories.map((s, idx) => ({
+          tempId: s.storyId || `T${idx + 1}`,
+          title: s.fullTitle || `Công việc #${idx + 1}`,
+          description: s.description || `${s.role}: ${s.action} để ${s.benefit}`,
+          targetDepartment: s.targetDepartment,
+          requiredLevel: s.complexity === 'HARD' ? 'SENIOR' : s.complexity === 'MEDIUM' ? 'MIDDLE' : 'JUNIOR',
+          priority: s.complexity === 'HARD' ? 'HIGH' : 'MEDIUM',
+          estimatedHours: s.complexity === 'HARD' ? 16 : s.complexity === 'MEDIUM' ? 8 : 4,
+          predecessorTempIds: Array.isArray(s.dependsOnStories) ? s.dependsOnStories : [],
+        }));
 
-      const parsed = completion.choices[0]?.message?.parsed;
-      if (parsed && Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
-        generatedTasks = parsed.tasks;
+        const validTempIds = new Set(generatedTasks.map((t) => t.tempId));
+        generatedTasks.forEach((t) => {
+          t.predecessorTempIds = t.predecessorTempIds.filter((id) => validTempIds.has(id));
+        });
       } else {
-        throw new Error('OpenAI returned empty task list');
+        throw new Error('AI Microservice returned insufficient stories');
       }
     } catch (aiError) {
-      console.warn('OpenAI decomposition call failed, activating graceful fallback:', aiError);
+      console.warn('AI decomposition via microservice failed, activating fallback:', aiError);
       generatedTasks = generateFallbackTasks(project.name, project.techStack);
     }
 

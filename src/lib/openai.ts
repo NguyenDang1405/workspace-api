@@ -4,9 +4,11 @@ import OpenAI from 'openai';
  * AI Service Microservice Configuration
  * Connects to the external Python FastAPI microservice via HTTP.
  */
-export const AI_SERVICE_URL = (
+export const AI_BASE_URL = (
   process.env.AI_SERVICE_URL || 'http://localhost:8000'
 ).replace(/\/$/, '');
+
+export const AI_SERVICE_URL = AI_BASE_URL;
 
 export const REQUEST_TIMEOUT_MS = 15000;
 
@@ -31,7 +33,7 @@ async function postFastApi<T>(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const targetUrl = `${AI_SERVICE_URL}${endpoint}`;
+    const targetUrl = `${AI_BASE_URL}${endpoint}`;
     const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
@@ -68,8 +70,12 @@ async function postFastApi<T>(
  */
 function extractEmbeddingVector(response: any, index: number = 0): number[] | null {
   if (!response) return null;
-  if (Array.isArray(response) && Array.isArray(response[index])) {
-    return response[index];
+  const target = response.data && !Array.isArray(response.data) ? response.data : response;
+  if (Array.isArray(target) && Array.isArray(target[index])) {
+    return target[index];
+  }
+  if (Array.isArray(target.embeddings) && Array.isArray(target.embeddings[index])) {
+    return target.embeddings[index];
   }
   if (Array.isArray(response.embeddings) && Array.isArray(response.embeddings[index])) {
     return response.embeddings[index];
@@ -331,44 +337,29 @@ export async function generateAdaptiveChecklist(
     taskTitle,
     taskDescription,
     userLevel: upperLevel,
+    task_title: taskTitle,
+    task_description: taskDescription,
+    user_level: upperLevel,
   });
 
   const rawItems =
+    fastApiRes?.data?.items ||
     fastApiRes?.items ||
+    fastApiRes?.data?.checklist ||
     fastApiRes?.checklist ||
-    (Array.isArray(fastApiRes) ? fastApiRes : null);
+    (Array.isArray(fastApiRes?.data) ? fastApiRes.data : Array.isArray(fastApiRes) ? fastApiRes : null);
 
   if (Array.isArray(rawItems) && rawItems.length > 0) {
-    const count = rawItems.length;
-    let isValidCount = false;
-    if (
-      (upperLevel === 'INTERN' || upperLevel === 'FRESHER') &&
-      count >= 5 &&
-      count <= 7
-    ) {
-      isValidCount = true;
-    } else if (
-      (upperLevel === 'JUNIOR' || upperLevel === 'MIDDLE') &&
-      count >= 3 &&
-      count <= 5
-    ) {
-      isValidCount = true;
-    } else if (upperLevel === 'SENIOR' && count >= 2 && count <= 3) {
-      isValidCount = true;
-    }
-
-    if (isValidCount) {
-      return rawItems.map((it: any, idx: number) => ({
-        id: it.id || `chk-${idx + 1}`,
-        taskText: String(it.taskText || it.text || `Công việc #${idx + 1}`),
-        isCompleted: false,
-        category: (['PREREQUISITE', 'IMPLEMENTATION', 'TESTING', 'SECURITY'].includes(
-          it.category || ''
-        )
-          ? it.category
-          : 'IMPLEMENTATION') as ChecklistCategory,
-      }));
-    }
+    return rawItems.map((it: any, idx: number) => ({
+      id: it.id || `chk-${idx + 1}`,
+      taskText: String(it.taskText || it.task_text || it.text || `Công việc #${idx + 1}`),
+      isCompleted: false,
+      category: (['PREREQUISITE', 'IMPLEMENTATION', 'TESTING', 'SECURITY'].includes(
+        it.category || ''
+      )
+        ? it.category
+        : 'IMPLEMENTATION') as ChecklistCategory,
+    }));
   }
 
   // 2. OpenAI SDK fallback if available
@@ -441,23 +432,27 @@ export async function verifyCodeWithAI(
   checklist: any[],
   diffSummary: string
 ): Promise<AIVerificationResult> {
-  const fastApiRes = await postFastApi<AIVerificationResult>('/api/v1/pr/verify', {
+  const fastApiRes = await postFastApi<any>('/api/v1/pr/verify', {
     taskTitle,
     taskDescription,
     checklist,
     diffSummary,
+    task_title: taskTitle,
+    task_description: taskDescription,
+    diff_summary: diffSummary,
   });
 
+  const targetRes = (fastApiRes as any)?.data || fastApiRes;
   if (
-    fastApiRes &&
-    typeof fastApiRes.score === 'number' &&
-    typeof fastApiRes.isVerified === 'boolean'
+    targetRes &&
+    typeof targetRes.score === 'number' &&
+    (typeof targetRes.isVerified === 'boolean' || typeof targetRes.is_verified === 'boolean')
   ) {
     return {
-      score: fastApiRes.score,
-      isVerified: fastApiRes.isVerified,
+      score: targetRes.score,
+      isVerified: Boolean(targetRes.isVerified ?? targetRes.is_verified),
       feedback:
-        fastApiRes.feedback ||
+        targetRes.feedback ||
         'Mã nguồn đáp ứng các tiêu chuẩn kỹ thuật của task.',
     };
   }
@@ -533,18 +528,22 @@ export async function generateDailyStandupAI(contextData: {
   blockers?: any[];
   [key: string]: any;
 }): Promise<StandupSynthesisResult> {
-  const fastApiRes = await postFastApi<StandupSynthesisResult>(
+  const fastApiRes = await postFastApi<any>(
     '/api/v1/standup/generate',
-    contextData
+    { context: contextData, ...contextData }
   );
 
-  if (
-    fastApiRes &&
-    fastApiRes.summaryYesterday &&
-    fastApiRes.planToday &&
-    fastApiRes.identifiedBlockers
-  ) {
-    return fastApiRes;
+  const targetRes = (fastApiRes as any)?.data || fastApiRes;
+  const summary = targetRes?.summaryYesterday || targetRes?.summary_yesterday;
+  const plan = targetRes?.planToday || targetRes?.plan_today;
+  const blockers = targetRes?.identifiedBlockers || targetRes?.identified_blockers;
+
+  if (summary && plan && blockers) {
+    return {
+      summaryYesterday: summary,
+      planToday: plan,
+      identifiedBlockers: blockers,
+    };
   }
 
   // Graceful fallback to OpenAI SDK if configured
@@ -641,32 +640,35 @@ export async function extractUserStoriesAI(
 ): Promise<ExtractedUserStoryItem[]> {
   const fastApiRes = await postFastApi<any>('/api/v1/srs/extract', {
     rawContent,
+    raw_content: rawContent,
   });
 
   const rawStories =
-    fastApiRes?.stories || (Array.isArray(fastApiRes) ? fastApiRes : null);
+    fastApiRes?.data?.stories ||
+    fastApiRes?.stories ||
+    (Array.isArray(fastApiRes?.data) ? fastApiRes.data : Array.isArray(fastApiRes) ? fastApiRes : null);
 
   if (Array.isArray(rawStories) && rawStories.length > 0) {
     return rawStories.map((s: any, idx: number) => ({
-      storyId: s.storyId || `US-0${idx + 1}`,
+      storyId: s.storyId || s.story_id || `US-0${idx + 1}`,
       role: s.role || 'Người dùng',
       action: s.action || 'thực thi tác vụ hệ thống',
       benefit: s.benefit || 'nâng cao hiệu năng vận hành',
-      fullTitle: s.fullTitle || `User Story ${idx + 1}`,
+      fullTitle: s.fullTitle || s.full_title || `User Story ${idx + 1}`,
       description: s.description || 'Đặc tả yêu cầu phần mềm',
       targetDepartment: (['FRONTEND', 'BACKEND', 'DEVOPS', 'QA', 'FULLSTACK'].includes(
-        s.targetDepartment
+        s.targetDepartment || s.target_department
       )
-        ? s.targetDepartment
+        ? (s.targetDepartment || s.target_department)
         : 'BACKEND') as 'FRONTEND' | 'BACKEND' | 'DEVOPS' | 'QA' | 'FULLSTACK',
       complexity: (['EASY', 'MEDIUM', 'HARD'].includes(s.complexity)
         ? s.complexity
         : 'MEDIUM') as 'EASY' | 'MEDIUM' | 'HARD',
       acceptanceCriteria:
-        Array.isArray(s.acceptanceCriteria) && s.acceptanceCriteria.length > 0
-          ? s.acceptanceCriteria
+        Array.isArray(s.acceptanceCriteria || s.acceptance_criteria) && (s.acceptanceCriteria || s.acceptance_criteria).length > 0
+          ? (s.acceptanceCriteria || s.acceptance_criteria)
           : ['Thỏa mãn các tiêu chuẩn kỹ thuật'],
-      dependsOnStories: Array.isArray(s.dependsOnStories) ? s.dependsOnStories : [],
+      dependsOnStories: Array.isArray(s.dependsOnStories || s.depends_on_stories) ? (s.dependsOnStories || s.depends_on_stories) : [],
     }));
   }
 
