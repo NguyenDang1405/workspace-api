@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
+import { prisma } from '@/lib/prisma';
 import { confirmAutoDispatchAssignments } from '@/services/auto-dispatch-scheduler.service';
 import { ApiResponse } from '@/types';
 import {
@@ -19,7 +20,8 @@ interface RouteContext {
  * POST /api/projects/:id/confirm-assignments
  *
  * Confirms & commits task assignments and CPM calendar dates to the database.
- * Supports manual override modifications from Project Leaders (Human-in-the-Loop).
+ * Supports manual override modifications from Project Leaders (Human-in-the-Loop)
+ * and bypasses approval for Individual/Personal mode projects.
  */
 export async function POST(request: NextRequest, { params }: RouteContext) {
   try {
@@ -41,21 +43,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       );
     }
 
-    // 2. RBAC Check: Only LEADER, PM, or ADMIN can confirm assignments
-    if (userRole === 'MEMBER') {
-      return NextResponse.json<ApiResponse>(
-        {
-          success: false,
-          error: {
-            code: 'FORBIDDEN',
-            message: 'Members are not authorized to confirm task assignments',
-          },
-        },
-        { status: 403 }
-      );
-    }
-
-    // 3. Project ID Validation
+    // 2. Project ID Validation & Retrieval
     if (!projectId || typeof projectId !== 'string' || projectId.trim().length === 0) {
       return NextResponse.json<ApiResponse>(
         {
@@ -66,6 +54,39 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
           },
         },
         { status: 400 }
+      );
+    }
+
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, ownerId: true, isPersonalMode: true },
+    });
+
+    if (!project) {
+      return NextResponse.json<ApiResponse>(
+        {
+          success: false,
+          error: {
+            code: 'PROJECT_NOT_FOUND',
+            message: 'Project does not exist',
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    // 3. RBAC Check: Only LEADER, PM, ADMIN or Personal Project Owner can confirm assignments
+    const isPersonalOwner = project.isPersonalMode && project.ownerId === userId;
+    if (userRole === 'MEMBER' && !isPersonalOwner) {
+      return NextResponse.json<ApiResponse>(
+        {
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Members are not authorized to confirm task assignments',
+          },
+        },
+        { status: 403 }
       );
     }
 

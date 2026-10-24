@@ -12,6 +12,7 @@ export interface AccessTokenPayload {
   role: string;
   authVersion: number;
   fullName?: string;
+  accountType?: string;
 }
 
 export type JWTPayload = AccessTokenPayload;
@@ -25,6 +26,7 @@ export async function createAccessToken(payload: {
   role: string;
   authVersion: number;
   fullName?: string;
+  accountType?: string;
 }): Promise<string> {
   return await new SignJWT({ ...payload })
     .setProtectedHeader({ alg: 'HS256' })

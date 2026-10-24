@@ -64,10 +64,8 @@ function computeCosineSimilarity(vecA: number[], vecB: number[]): number {
 export function addWorkingHours(startDate: Date, offsetHours: number): Date {
   const date = new Date(startDate.getTime());
 
-  // If outside 08:00 - 17:00 or on weekend, snap to next working morning 08:00
   const snapToWorkdayMorning = (d: Date) => {
     while (d.getUTCDay() === 0 || d.getUTCDay() === 6) {
-      // 0 = Sunday, 6 = Saturday
       d.setUTCDate(d.getUTCDate() + 1);
       d.setUTCHours(8, 0, 0, 0);
     }
@@ -105,8 +103,77 @@ export function addWorkingHours(startDate: Date, offsetHours: number): Date {
   return date;
 }
 
+/**
+ * MOD-13: Advances schedule date strictly within the user's defined FREE_TIME availability slots.
+ * Ensures student/individual project tasks do not conflict with busy class/exam periods.
+ */
+export function addAvailabilityWorkingHours(
+  startDate: Date,
+  offsetHours: number,
+  freeSlots: Array<{ dayOfWeek: number; startTime: string; endTime: string }>
+): Date {
+  if (!freeSlots || freeSlots.length === 0) {
+    return addWorkingHours(startDate, offsetHours);
+  }
+
+  const parsedSlots = freeSlots.map((s) => {
+    const [sH, sM] = s.startTime.split(':').map(Number);
+    const [eH, eM] = s.endTime.split(':').map(Number);
+    return {
+      dayOfWeek: s.dayOfWeek,
+      startHour: sH + sM / 60,
+      endHour: eH + eM / 60,
+    };
+  });
+
+  const date = new Date(startDate.getTime());
+  let remainingHours = Math.max(0, offsetHours);
+
+  let maxDays = 120; // safety limit
+  while (remainingHours > 0 && maxDays > 0) {
+    const currentDay = date.getUTCDay();
+    const currentHour = date.getUTCHours() + date.getUTCMinutes() / 60;
+
+    const todaySlots = parsedSlots
+      .filter((s) => s.dayOfWeek === currentDay && s.endHour > currentHour)
+      .sort((a, b) => a.startHour - b.startHour);
+
+    if (todaySlots.length > 0) {
+      for (const slot of todaySlots) {
+        if (remainingHours <= 0) break;
+
+        const effectiveStart = Math.max(currentHour, slot.startHour);
+        if (effectiveStart > currentHour) {
+          const startMinutes = Math.round(slot.startHour * 60);
+          date.setUTCHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
+        }
+
+        const slotCapacity = slot.endHour - effectiveStart;
+        if (remainingHours <= slotCapacity) {
+          const addedMinutes = Math.round(remainingHours * 60);
+          date.setUTCMinutes(date.getUTCMinutes() + addedMinutes);
+          remainingHours = 0;
+          break;
+        } else {
+          remainingHours -= slotCapacity;
+          const endMinutes = Math.round(slot.endHour * 60);
+          date.setUTCHours(Math.floor(endMinutes / 60), endMinutes % 60, 0, 0);
+        }
+      }
+    }
+
+    if (remainingHours > 0) {
+      date.setUTCDate(date.getUTCDate() + 1);
+      date.setUTCHours(0, 0, 0, 0);
+      maxDays--;
+    }
+  }
+
+  return date;
+}
+
 // ============================================================================
-// SERVICE: AI AUTO-DISPATCH & CALENDAR SCHEDULING (MOD-11)
+// SERVICE: AI AUTO-DISPATCH & CALENDAR SCHEDULING (MOD-11 + MOD-13)
 // ============================================================================
 
 export interface RawCandidateRecord {
@@ -122,7 +189,7 @@ export interface RawCandidateRecord {
 
 /**
  * 1. Generates an AI-driven preview auto-dispatch & timeline schedule plan for a project.
- * Does not mutate the database; designed for Human-in-the-Loop Leader preview.
+ * Supports both ENTERPRISE (multi-member matchmaking) and INDIVIDUAL (zero-friction auto-assign).
  */
 export async function generateAutoDispatchPlan(
   projectId: string,
@@ -132,6 +199,14 @@ export async function generateAutoDispatchPlan(
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
+      owner: {
+        include: {
+          availabilitySlots: {
+            where: { slotType: 'FREE_TIME' },
+            orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
+          },
+        },
+      },
       team: {
         include: {
           memberships: {
@@ -165,7 +240,73 @@ export async function generateAutoDispatchPlan(
     };
   }
 
-  // 2. Fetch raw task embeddings from PostgreSQL
+  // Setup Base Project Timeline
+  const projectStartDate = project.startDate ? new Date(project.startDate) : new Date();
+  projectStartDate.setUTCHours(8, 0, 0, 0);
+
+  // --------------------------------------------------------------------------
+  // MOD-13 SPECIAL HANDLING: INDIVIDUAL / PERSONAL MODE
+  // --------------------------------------------------------------------------
+  const isPersonalMode = project.isPersonalMode || project.owner?.accountType === 'INDIVIDUAL';
+  if (isPersonalMode && project.owner) {
+    const owner = project.owner;
+    const freeSlots = owner.availabilitySlots || [];
+
+    const assignments: AutoDispatchAssignment[] = [];
+    let latestTaskDueDate = new Date(projectStartDate.getTime());
+
+    for (const task of tasks) {
+      const earlyStartHours = Number(task.earlyStart) || 0;
+      const estHours = Number(task.estimatedHours) || 4.0;
+
+      const taskStartDate = addAvailabilityWorkingHours(projectStartDate, earlyStartHours, freeSlots);
+      const taskDueDate = addAvailabilityWorkingHours(taskStartDate, estHours, freeSlots);
+
+      if (taskDueDate > latestTaskDueDate) {
+        latestTaskDueDate = taskDueDate;
+      }
+
+      const suggestedAssignee: SuggestedAssignee = {
+        userId: owner.id,
+        fullName: owner.fullName,
+        email: owner.email,
+        matchScore: 100,
+        matchReason: 'Chế độ cá nhân (Individual Mode): Tự động phân công cho chủ dự án',
+      };
+
+      assignments.push({
+        taskId: task.id,
+        taskTitle: task.title,
+        estimatedHours: estHours,
+        isCriticalPath: task.isCriticalPath,
+        suggestedAssignee,
+        schedule: {
+          startDate: taskStartDate.toISOString(),
+          dueDate: taskDueDate.toISOString(),
+        },
+        availableCandidates: [
+          {
+            userId: owner.id,
+            fullName: owner.fullName,
+            matchScore: 100,
+            matchReason: 'Chủ dự án cá nhân',
+          },
+        ],
+      });
+    }
+
+    return {
+      projectId,
+      totalTasks: assignments.length,
+      estimatedCompletionDate: latestTaskDueDate.toISOString(),
+      assignments,
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // ENTERPRISE MODE: MATCHMAKING ENGINE ACROSS TEAM POOL
+  // --------------------------------------------------------------------------
+  // Fetch raw task embeddings from PostgreSQL
   const rawTaskEmbeddings = await prisma.$queryRaw<
     Array<{ id: string; embedding: string | null }>
   >`
@@ -176,7 +317,7 @@ export async function generateAutoDispatchPlan(
   const taskEmbeddingMap = new Map<string, string | null>();
   rawTaskEmbeddings.forEach((r) => taskEmbeddingMap.set(r.id, r.embedding));
 
-  // 3. Resolve eligible project candidates
+  // Resolve eligible candidates
   let eligibleUserIds: string[] = [];
   if (project.team && project.team.memberships.length > 0) {
     eligibleUserIds = project.team.memberships.map((m) => m.userId);
@@ -184,7 +325,6 @@ export async function generateAutoDispatchPlan(
       eligibleUserIds.push(project.ownerId);
     }
   } else {
-    // If no team linked, candidate pool includes all active members/leaders
     const activeUsers = await prisma.user.findMany({
       where: { isActive: true },
       select: { id: true },
@@ -192,7 +332,6 @@ export async function generateAutoDispatchPlan(
     eligibleUserIds = activeUsers.map((u) => u.id);
   }
 
-  // 4. Fetch candidate talent profiles, Elo skill ratings, and current active workloads
   const candidateUsers = await prisma.user.findMany({
     where: { id: { in: eligibleUserIds }, isActive: true },
     include: {
@@ -208,7 +347,6 @@ export async function generateAutoDispatchPlan(
     },
   });
 
-  // Fetch raw skill embeddings for candidates
   const rawUserEmbeddings = await prisma.$queryRaw<
     Array<{ user_id: string; embedding: string | null }>
   >`
@@ -219,7 +357,6 @@ export async function generateAutoDispatchPlan(
   const userEmbeddingMap = new Map<string, string | null>();
   rawUserEmbeddings.forEach((r) => userEmbeddingMap.set(r.user_id, r.embedding));
 
-  // Build candidate records
   const candidates: RawCandidateRecord[] = candidateUsers.map((u) => {
     const ratings = u.skillRatings;
     const avgRating =
@@ -239,7 +376,6 @@ export async function generateAutoDispatchPlan(
     };
   });
 
-  // Fallback: If candidate pool is somehow empty, query at least 1 active user
   if (candidates.length === 0) {
     const fallbackUser = await prisma.user.findFirst({
       where: { isActive: true },
@@ -259,23 +395,16 @@ export async function generateAutoDispatchPlan(
     }
   }
 
-  // 5. Setup Project Base Timeline (08:00 UTC)
-  const projectStartDate = project.startDate ? new Date(project.startDate) : new Date();
-  projectStartDate.setUTCHours(8, 0, 0, 0);
-
-  // Dynamic workload tracker during preview to achieve workload balancing
   const projectedWorkloadMap = new Map<string, number>();
   candidates.forEach((c) => projectedWorkloadMap.set(c.id, c.activeWorkload));
 
   const assignments: AutoDispatchAssignment[] = [];
   let latestTaskDueDate = new Date(projectStartDate.getTime());
 
-  // 6. Matchmaking & Scheduling loop for each task
   for (const task of tasks) {
     let taskVecStr = taskEmbeddingMap.get(task.id);
     let taskVec = parseVector(taskVecStr);
 
-    // If taskEmbedding is missing, generate embedding via OpenAI adapter and cache
     if (!taskVec || taskVec.length === 0) {
       try {
         const generatedVec = await generateTaskEmbedding(task.title, task.description);
@@ -295,7 +424,6 @@ export async function generateAutoDispatchPlan(
       }
     }
 
-    // Evaluate each candidate
     const scoredCandidates: Array<{
       candidate: RawCandidateRecord;
       matchScore: number;
@@ -308,15 +436,10 @@ export async function generateAutoDispatchPlan(
       const cosine =
         taskVec && candVec ? computeCosineSimilarity(taskVec, candVec) : 0.65;
 
-      // Elo normalized to [0, 1] (1200 -> 0.6, 2000 -> 1.0)
       const normElo = Math.min(Math.max(cand.avgElo / 2000.0, 0.0), 1.0);
-
-      // Workload penalty based on active + projected tasks
       const currentWorkload = projectedWorkloadMap.get(cand.id) || 0;
       const workloadPenalty = Math.min(currentWorkload / 5.0, 1.0);
 
-      // MOD-11 Formulation:
-      // Score = 0.5 * CosineSim + 0.3 * NormElo - 0.2 * WorkloadPenalty
       const rawScore = 0.5 * cosine + 0.3 * normElo - 0.2 * workloadPenalty;
       const matchScore = Math.round(Math.min(Math.max(rawScore, 0.0), 1.0) * 100);
 
@@ -330,7 +453,6 @@ export async function generateAutoDispatchPlan(
       });
     }
 
-    // Sort descending by matchScore
     scoredCandidates.sort((a, b) => b.matchScore - a.matchScore);
 
     const top = scoredCandidates[0];
@@ -342,10 +464,8 @@ export async function generateAutoDispatchPlan(
       matchReason: top.matchReason,
     };
 
-    // Increment projected workload for the chosen candidate to balance load
     projectedWorkloadMap.set(top.candidate.id, (projectedWorkloadMap.get(top.candidate.id) || 0) + 1);
 
-    // Timeline calculation based on CPM earlyStart and estimatedHours
     const earlyStartHours = Number(task.earlyStart) || 0;
     const estHours = Number(task.estimatedHours) || 4.0;
 
@@ -402,7 +522,6 @@ export async function confirmAutoDispatchAssignments(
     throw new Error('PROJECT_NOT_FOUND');
   }
 
-  // Execute database transaction
   const updatedTasks = await prisma.$transaction(async (tx) => {
     const results: Array<{
       id: string;
@@ -428,11 +547,13 @@ export async function confirmAutoDispatchAssignments(
       const parsedStartDate = new Date(conf.startDate);
       const parsedDueDate = new Date(conf.dueDate);
 
+      const assignedUserId = conf.finalAssigneeId || project.ownerId;
+
       // 1. Update task in database
       const updated = await tx.task.update({
         where: { id: conf.taskId },
         data: {
-          assignedTo: conf.finalAssigneeId,
+          assignedTo: assignedUserId,
           startDate: parsedStartDate,
           dueDate: parsedDueDate,
           status: 'TODO',
@@ -443,7 +564,7 @@ export async function confirmAutoDispatchAssignments(
       await tx.dispatchHistory.create({
         data: {
           taskId: conf.taskId,
-          chosenUserId: conf.finalAssigneeId,
+          chosenUserId: assignedUserId,
           recommendedCandidates: [],
           isHumanOverride: isOverride,
           overrideReason: conf.overrideReason || null,

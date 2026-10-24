@@ -12,6 +12,10 @@ export type TaskPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
 export type TaskStatus = 'SCHEDULED' | 'TODO' | 'IN_PROGRESS' | 'REVIEW' | 'DONE';
 export type DispatchRunStatus = 'PREVIEW' | 'APPROVED' | 'CANCELLED';
 export type SkillOutcome = 'ACCEPTED' | 'REJECTED' | 'OVERDUE';
+export type AccountType = 'INDIVIDUAL' | 'ENTERPRISE';
+export type SlotType = 'FREE_TIME' | 'BUSY_CLASS' | 'BUSY_EXAM' | 'OTHER';
+
+export * from './availability.types';
 
 // ==========================================
 // 2. API ENVELOPE RESPONSE FORMAT
@@ -40,6 +44,7 @@ export const RegisterSchema = z.object({
   level: z.enum(['INTERN', 'FRESHER', 'JUNIOR', 'MIDDLE', 'SENIOR']).optional().default('JUNIOR'),
   skills: z.array(z.string()).optional().default([]),
   bioSummary: z.string().max(1000).optional(),
+  accountType: z.enum(['INDIVIDUAL', 'ENTERPRISE']).optional().default('INDIVIDUAL'),
 });
 export type RegisterDto = z.infer<typeof RegisterSchema>;
 

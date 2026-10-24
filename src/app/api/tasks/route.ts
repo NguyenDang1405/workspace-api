@@ -76,6 +76,19 @@ export async function POST(request: Request) {
     const body = await request.json();
     const data = CreateTaskSchema.parse(body);
 
+    // MOD-13: Adaptive Auto-Assignment & Approval Bypass for Personal Projects
+    const project = await prisma.project.findUnique({
+      where: { id: data.projectId },
+      select: { id: true, isPersonalMode: true, ownerId: true },
+    });
+
+    if (project?.isPersonalMode && !data.assignedTo) {
+      data.assignedTo = project.ownerId;
+      if (!body.status || body.status === 'SCHEDULED') {
+        data.status = 'TODO';
+      }
+    }
+
     const initialStartedAt = data.status === 'IN_PROGRESS' ? (data.startedAt ? new Date(data.startedAt) : new Date()) : (data.startedAt ? new Date(data.startedAt) : null);
     const initialCompletedAt = data.status === 'DONE' ? (data.completedAt ? new Date(data.completedAt) : new Date()) : (data.completedAt ? new Date(data.completedAt) : null);
 

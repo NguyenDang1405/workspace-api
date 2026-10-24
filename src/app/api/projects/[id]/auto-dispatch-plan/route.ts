@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { prisma } from '@/lib/prisma';
 import { generateAutoDispatchPlan } from '@/services/auto-dispatch-scheduler.service';
 import { ApiResponse } from '@/types';
 import { AutoDispatchPlanResponseData } from '@/types/auto-dispatch.types';
@@ -15,7 +16,8 @@ interface RouteContext {
  * POST /api/projects/:id/auto-dispatch-plan
  *
  * Generates an AI-driven preview auto-dispatch & timeline schedule plan for a project.
- * Implements Human-in-the-Loop review for project Leaders and Admins.
+ * Implements Human-in-the-Loop review for project Leaders and Admins,
+ * as well as Zero-Friction scheduling for Individual/Personal mode projects.
  */
 export async function POST(request: NextRequest, { params }: RouteContext) {
   try {
@@ -37,21 +39,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       );
     }
 
-    // 2. RBAC Check: Only LEADER, PM, or ADMIN can generate auto-dispatch plans
-    if (userRole === 'MEMBER') {
-      return NextResponse.json<ApiResponse>(
-        {
-          success: false,
-          error: {
-            code: 'FORBIDDEN',
-            message: 'Members are not authorized to access auto-dispatch planning',
-          },
-        },
-        { status: 403 }
-      );
-    }
-
-    // 3. Project ID Validation
+    // 2. Project ID Validation & Retrieval
     if (!projectId || typeof projectId !== 'string' || projectId.trim().length === 0) {
       return NextResponse.json<ApiResponse>(
         {
@@ -62,6 +50,39 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
           },
         },
         { status: 400 }
+      );
+    }
+
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, ownerId: true, isPersonalMode: true },
+    });
+
+    if (!project) {
+      return NextResponse.json<ApiResponse>(
+        {
+          success: false,
+          error: {
+            code: 'PROJECT_NOT_FOUND',
+            message: 'Project does not exist',
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    // 3. RBAC Check: Only LEADER, PM, ADMIN or Personal Project Owner can generate auto-dispatch plans
+    const isPersonalOwner = project.isPersonalMode && project.ownerId === userId;
+    if (userRole === 'MEMBER' && !isPersonalOwner) {
+      return NextResponse.json<ApiResponse>(
+        {
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Members are not authorized to access auto-dispatch planning',
+          },
+        },
+        { status: 403 }
       );
     }
 

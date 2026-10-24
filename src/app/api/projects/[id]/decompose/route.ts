@@ -108,21 +108,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       );
     }
 
-    // 1. RBAC Check: Only ADMIN, PM, or LEADER can decompose projects
-    if (userRole === 'MEMBER') {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: 'FORBIDDEN',
-            message: 'Members are not authorized to decompose project tasks',
-          },
-        },
-        { status: 403 }
-      );
-    }
-
-    // 2. Query Project
+    // 1. Query Project
     const project = await prisma.project.findUnique({
       where: { id: projectId },
     });
@@ -137,6 +123,21 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
           },
         },
         { status: 404 }
+      );
+    }
+
+    // 2. RBAC Check: Only ADMIN, PM, LEADER or Personal Project Owner can decompose projects
+    const isPersonalOwner = project.isPersonalMode && project.ownerId === userId;
+    if (userRole === 'MEMBER' && !isPersonalOwner) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Members are not authorized to decompose project tasks',
+          },
+        },
+        { status: 403 }
       );
     }
 

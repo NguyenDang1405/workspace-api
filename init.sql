@@ -402,3 +402,40 @@ CREATE TRIGGER z_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FU
 
 DROP TRIGGER IF EXISTS z_user_skill_ratings_updated_at ON user_skill_ratings;
 CREATE TRIGGER z_user_skill_ratings_updated_at BEFORE UPDATE ON user_skill_ratings FOR EACH ROW EXECUTE FUNCTION app_set_updated_at();
+
+-- ============================================================================
+-- PHẦN 11: MOD-13 DUAL-AUDIENCE ONBOARDING & AVAILABILITY SLOTS
+-- ============================================================================
+ALTER TABLE users ADD COLUMN IF NOT EXISTS account_type VARCHAR(20) NOT NULL DEFAULT 'INDIVIDUAL';
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_personal_mode BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS workspace_id UUID;
+
+CREATE TABLE IF NOT EXISTS workspaces (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(100) NOT NULL,
+    slug VARCHAR(100) NOT NULL UNIQUE,
+    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS workspace_members (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role VARCHAR(20) NOT NULL DEFAULT 'OWNER',
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_workspace_members UNIQUE (workspace_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_availability_slots (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    day_of_week INT NOT NULL CHECK (day_of_week >= 0 AND day_of_week <= 6),
+    start_time VARCHAR(10) NOT NULL,
+    end_time VARCHAR(10) NOT NULL,
+    slot_type VARCHAR(30) NOT NULL DEFAULT 'FREE_TIME',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_availability_lookup ON user_availability_slots (user_id, day_of_week);

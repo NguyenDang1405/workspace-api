@@ -36,6 +36,7 @@ export async function POST(request: Request) {
           fullName: validatedData.fullName,
           avatarUrl: validatedData.avatarUrl || null,
           role: validatedData.role,
+          accountType: validatedData.accountType,
         },
       });
 
@@ -49,6 +50,37 @@ export async function POST(request: Request) {
         },
       });
 
+      // MOD-13: Zero-friction Onboarding for INDIVIDUAL accounts
+      if (validatedData.accountType === 'INDIVIDUAL') {
+        const slug = `personal-${createdUser.id.slice(0, 8)}`;
+        const workspace = await tx.workspace.create({
+          data: {
+            name: `Không gian của ${createdUser.fullName}`,
+            slug,
+            ownerId: createdUser.id,
+            members: {
+              create: {
+                userId: createdUser.id,
+                role: 'OWNER',
+              },
+            },
+          },
+        });
+
+        await tx.project.create({
+          data: {
+            name: 'Kế hoạch Học tập & Mục tiêu Cá nhân',
+            description: 'Dự án cá nhân đầu tiên được khởi tạo tự động',
+            ownerId: createdUser.id,
+            workspaceId: workspace.id,
+            isPersonalMode: true,
+            complexity: 'EASY',
+            startDate: new Date(),
+            targetEndDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          },
+        });
+      }
+
       return createdUser;
     });
 
@@ -58,6 +90,7 @@ export async function POST(request: Request) {
       role: user.role,
       authVersion: user.authVersion,
       fullName: user.fullName,
+      accountType: user.accountType,
     });
 
     const responseBody: ApiResponse = {
@@ -68,6 +101,7 @@ export async function POST(request: Request) {
         fullName: user.fullName,
         avatarUrl: user.avatarUrl,
         role: user.role,
+        accountType: user.accountType,
         accessToken,
       },
       message: 'User registered successfully',

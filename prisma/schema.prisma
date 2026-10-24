@@ -52,6 +52,18 @@ enum TaskPriority {
   URGENT
 }
 
+enum AccountType {
+  INDIVIDUAL
+  ENTERPRISE
+}
+
+enum SlotType {
+  FREE_TIME
+  BUSY_CLASS
+  BUSY_EXAM
+  OTHER
+}
+
 enum TaskStatus {
   SCHEDULED
   TODO
@@ -69,6 +81,7 @@ model User {
   avatarUrl            String?              @map("avatar_url")
   isActive             Boolean              @default(true) @map("is_active")
   authVersion          Int                  @default(1) @map("auth_version")
+  accountType          AccountType          @default(INDIVIDUAL) @map("account_type")
   createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz
   updatedAt            DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -84,6 +97,8 @@ model User {
   auditActor           TalentAuditLog[]     @relation("AuditActor")
   dispatchAssignments  DispatchHistory[]    @relation("ChosenUser")
   skillRatingLogs      UserSkillRatingLog[]
+  availabilitySlots    UserAvailabilitySlot[]
+  workspaceMemberships WorkspaceMember[]
 
   @@map("users")
 }
@@ -173,10 +188,13 @@ model Project {
   startDate             DateTime             @default(now()) @map("start_date") @db.Date
   targetEndDate         DateTime             @map("target_end_date") @db.Date
   status                ProjectStatus        @default(ACTIVE)
+  isPersonalMode        Boolean              @default(false) @map("is_personal_mode")
+  workspaceId           String?              @map("workspace_id") @db.Uuid
   createdAt             DateTime             @default(now()) @map("created_at") @db.Timestamptz
   updatedAt             DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   team                  Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  workspace             Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
   owner                 User                 @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   tasks                 Task[]
   documents             ProjectDocument[]
@@ -405,4 +423,47 @@ model TalentAuditLog {
 
   @@index([subjectUserId, createdAt(sort: Desc)], map: "idx_talent_audit_lookup")
   @@map("talent_audit_logs")
+}
+
+model UserAvailabilitySlot {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  dayOfWeek Int      @map("day_of_week") // 0 (Sunday) -> 6 (Saturday)
+  startTime String   @map("start_time") @db.VarChar(10) // Format "HH:mm" (e.g., "19:00")
+  endTime   String   @map("end_time") @db.VarChar(10)   // Format "HH:mm" (e.g., "22:30")
+  slotType  SlotType @default(FREE_TIME)  @map("slot_type")
+  createdAt DateTime @default(now())      @map("created_at") @db.Timestamptz
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, dayOfWeek], map: "idx_user_availability_lookup")
+  @@map("user_availability_slots")
+}
+
+model Workspace {
+  id        String            @id @default(uuid()) @db.Uuid
+  name      String            @db.VarChar(100)
+  slug      String            @unique @db.VarChar(100)
+  ownerId   String            @map("owner_id") @db.Uuid
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  members   WorkspaceMember[]
+  projects  Project[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  role        String    @default("OWNER") @db.VarChar(20)
+  joinedAt    DateTime  @default(now()) @map("joined_at") @db.Timestamptz
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId], map: "uq_workspace_members")
+  @@map("workspace_members")
 }
