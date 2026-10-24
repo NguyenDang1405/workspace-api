@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     started_at TIMESTAMPTZ,
     in_review_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
+    start_date DATE,
     due_date DATE,
     is_blocked BOOLEAN NOT NULL DEFAULT false,
     block_reason VARCHAR(255),

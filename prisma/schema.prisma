@@ -232,6 +232,7 @@ model Task {
   startedAt            DateTime?            @map("started_at") @db.Timestamptz
   inReviewAt           DateTime?            @map("in_review_at") @db.Timestamptz
   completedAt          DateTime?            @map("completed_at") @db.Timestamptz
+  startDate            DateTime?            @map("start_date") @db.Date
   dueDate              DateTime?            @map("due_date") @db.Date
   isBlocked            Boolean              @default(false) @map("is_blocked")
   blockReason          String?              @map("block_reason") @db.VarChar(255)
