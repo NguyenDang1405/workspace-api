@@ -31,3 +31,4 @@ export interface UserAvailabilityResponseData {
   userId: string;
   slots: UserAvailabilitySlotDto[];
 }
+
